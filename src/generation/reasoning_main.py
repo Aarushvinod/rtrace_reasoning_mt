@@ -1,0 +1,399 @@
+"""
+reasoning_main.py
+─────────────────
+Entrypoint for reasoning-model generation runs. Loads FLORES devtest, builds
+few-shot demonstrations via the configured ensemble method (RRF / random /
+sentinel / edit_dist), boots a vLLM server for each requested model in
+sequence via `vllm_server.VLLMServerProcess`, and streams reasoning +
+translation into per-direction JSONL files.
+
+Inputs:  SRC_LANG_CODES, TGT_LANG_CODES, K_LIST, EMB_METHODS, ENSEMBLE_METHOD,
+         PROMPT_HEADER, and the vLLM sampling knobs (MAX_NEW_TOKENS,
+         TEMPERATURE, TOP_P, TOP_K, MIN_P) configured at the top of this file.
+Outputs: JSONL translation files under GEN_ROOT and reasoning traces under
+         REASONING_ROOT.
+"""
+
+# =========================
+# Cell 3 — Reasoning models main (config + main only)
+# =========================
+
+import os
+import torch
+import numpy as np
+
+from typing import Dict, List, Tuple, Optional
+
+from openai import OpenAI
+
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+os.environ["HUGGINGFACE_HUB_TOKEN"] = HF_TOKEN
+
+OPENAI_API_KEY = "EMPTY"
+
+EMB_ROOT = "drive/MyDrive/flores_embeddings"
+BM25_METHOD_NAME = "bm25"
+
+SRC_LANG_CODES: List[str] = ["eng_Latn"]
+
+TGT_LANG_CODES: List[str] = [
+    "wol_Latn",
+    "swh_Latn",
+    "lus_Latn",
+    "mni_Beng",
+    "tel_Telu",
+    "tam_Taml",
+    "uzn_Latn",
+]
+
+LANG_NAME: Dict[str, str] = {
+    "eng_Latn": "English",
+    "wol_Latn": "Wolof",
+    "swh_Latn": "Swahili",
+    "lus_Latn": "Mizo",
+    "mni_Beng": "Manipuri",
+    "tel_Telu": "Telugu",
+    "tam_Taml": "Tamil",
+    "uzn_Latn": "Northern Uzbek",
+}
+
+LANG_DIRNAME: Dict[str, str] = {
+    "eng_Latn": "eng",
+    "wol_Latn": "wol",
+    "swh_Latn": "swh",
+    "lus_Latn": "lus",
+    "mni_Beng": "mni",
+    "tel_Telu": "tel",
+    "tam_Taml": "tam",
+    "uzn_Latn": "uzn",
+}
+
+K_LIST = [1, 3, 5, 7, 10]
+K_LIST = sorted(set(int(k) for k in K_LIST))
+K_MAX = max(K_LIST) if K_LIST else 0
+
+M_PER_MODEL = K_MAX
+
+EMB_METHODS = ["cohere", "sonar", "labse", "MiniLM", "e5"]
+ENSEMBLE_METHOD = "edit_dist"
+RRF_K0 = 60
+
+FRAGMENTSHOT_MAX_FRAGMENT_SIZE = 5
+FRAGMENTSHOT_OVERLAPS = False
+
+DEVTEST_N: Optional[int] = 100
+
+# ── HuggingFace-recommended sampling params for Qwen3 non-thinking mode.
+#    Same values across Qwen3-8B / Qwen3-14B / Qwen3-32B per the official
+#    model cards (Qwen/Qwen3-{8B,14B,32B}). For thinking mode the recipe is
+#    temperature=0.6 + top_p=0.95; for non-thinking it's 0.7 + 0.8.
+REQUEST_BATCH_SIZE = 32
+MAX_NEW_TOKENS = 256
+TEMPERATURE = 0.7
+TOP_P = 0.8
+TOP_K = 20
+MIN_P = 0
+MAX_MODEL_LEN = 8192
+STOP_SEQUENCES = []
+
+PROMPT_HEADER = (
+    'You are an expert translator who translates sentences from any specified src language to any specified tgt language.'
+    ' You should reason over the demonstration sentences provided to you below, using them as a guide to accurately translate the final sentence.'
+    ' Your final response should be the translation of the final untranslated src sentence to the tgt language with no other words or characters accompanying the translation.\n'
+)
+SYSTEM_PROMPT = False
+
+GEN_ROOT = "drive/MyDrive/Qwen_All_Reasoning_Off_edit_dist"
+REASONING_ROOT = "drive/MyDrive/reasoning_traces_Qwen_dummy"
+ANALYSIS_DIR = "retrieval_overlap_analysis"
+
+# -----------------------------------------------------------------------
+# When True:  sentences that already have a non-empty translation in the
+#             output JSONL are skipped; their stored translation and
+#             reasoning are preserved as-is.  Only sentences whose stored
+#             translation is None or "" are (re-)translated, and for those
+#             the reasoning trace is always overwritten with the new one.
+# When False: original behaviour — every sentence is (re-)translated and
+#             every output file is overwritten from scratch.
+# -----------------------------------------------------------------------
+SKIP_EXISTING_TRANSLATIONS: bool = True
+
+# -----------------------------------------------------------------------
+# Number of additional attempts to make when the model returns an empty
+# translation.  The initial attempt does not count as a retry, so a value
+# of 3 means up to 4 total calls per sentence.  Set to 0 to disable
+# retries entirely.
+# -----------------------------------------------------------------------
+MAX_TRANSLATION_RETRIES: int = 7
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+TORCH_DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
+TOPK_SIM_CHUNK = 256
+
+VLLM_SERVER_HOST = "127.0.0.1"
+VLLM_PORT_BASE = 8000
+VLLM_SERVER_START_TIMEOUT_S = 600
+VLLM_SERVER_POLL_INTERVAL_S = 1.0
+VLLM_SERVER_LOG_DIR = "vllm_server_logs"
+
+LOG_REASONING_TRACES = False
+ENABLE_REASONING = False
+
+RANDOM_SELECTION_FILEPATHS: List[str] = [
+    "drive/MyDrive/random_pool_selections/eng_random_pool.json",
+]
+
+reasoning_model_specs: List[Tuple[str, str, Optional[str]]] = [
+    ("qwen3_8b",  "Qwen/Qwen3-8B",  None),
+    ("qwen3_14b", "Qwen/Qwen3-14B", None),
+    ("qwen3_32b", "Qwen/Qwen3-32B", None),
+]
+
+
+def main() -> None:
+    """
+    Purpose: Run retrieval+ensembling+generation pipeline for reasoning models across multiple src->tgt directions.
+    Inputs: config variables in this cell and helper functions from Cell 1.
+    Outputs: JSONL generations and JSONL reasoning traces.
+    """
+    use_fragment_shot, ensemble_submethod = parse_ensemble_method(ENSEMBLE_METHOD)
+
+    if M_PER_MODEL < K_MAX:
+        raise ValueError(f"M_PER_MODEL must be >= K_MAX (got {M_PER_MODEL} < {K_MAX}).")
+
+    if ensemble_submethod == "random_pool" and len(RANDOM_SELECTION_FILEPATHS) != len(SRC_LANG_CODES):
+        raise ValueError(
+            f"RANDOM_SELECTION_FILEPATHS must have the same length as SRC_LANG_CODES when using random_pool "
+            f"(got {len(RANDOM_SELECTION_FILEPATHS)} and {len(SRC_LANG_CODES)})."
+        )
+
+    tp = max(1, torch.cuda.device_count())
+
+    jobs: List[Dict[str, object]] = []
+
+    for src_idx, src_lang in enumerate(SRC_LANG_CODES):
+        src_name = LANG_NAME.get(src_lang, src_lang)
+        src_dir = LANG_DIRNAME.get(src_lang, src_lang)
+
+        if ensemble_submethod == "random_pool":
+            random_selection_path = RANDOM_SELECTION_FILEPATHS[src_idx]
+        else:
+            random_selection_path = None
+
+        src_data = load_flores_sentences(src_lang)
+        src_dev = src_data["dev"]
+        src_devtest_full = src_data["devtest"]
+        src_devtest = _apply_devtest_limit(src_devtest_full, DEVTEST_N)
+
+        n_dev = len(src_dev)
+        n_devtest_full = len(src_devtest_full)
+        n_devtest = len(src_devtest)
+
+        if n_devtest == 0:
+            raise ValueError(f"DEVTEST_N produced empty devtest for src_lang={src_lang}.")
+
+        emb_full = load_retrieval_embeddings(
+            emb_root=EMB_ROOT,
+            methods=EMB_METHODS + ([BM25_METHOD_NAME] if ensemble_submethod == "pool_bm25_rerank" else []),
+            lang_code=src_lang,
+            n_dev=n_dev,
+            n_devtest=n_devtest_full,
+        )
+
+        if ensemble_submethod == "pool_bm25_rerank":
+            _, bm25_devtest_scores_full = emb_full[BM25_METHOD_NAME]
+            bm25_devtest_scores = bm25_devtest_scores_full[:n_devtest, :]
+        else:
+            bm25_devtest_scores = None
+
+        if ensemble_submethod == "pool_sentinel_src_rerank":
+            sentinel_src_scores = load_sentinel_src_scores(
+                emb_root=EMB_ROOT,
+                lang_code=src_lang,
+                n_dev=n_dev,
+            )
+        else:
+            sentinel_src_scores = None
+
+        per_method_idx_m_full: Dict[str, np.ndarray] = {}
+
+        if not use_fragment_shot:
+            for m in EMB_METHODS:
+                dev_emb, devtest_emb_full = emb_full[m]
+                devtest_emb = devtest_emb_full[:n_devtest, :]
+                idx, _ = topk_cosine_indices_and_scores(
+                    dev_emb,
+                    devtest_emb,
+                    M_PER_MODEL,
+                    device=DEVICE,
+                    torch_dtype=TORCH_DTYPE,
+                    chunk=TOPK_SIM_CHUNK,
+                )
+                per_method_idx_m_full[m] = idx
+
+        for tgt_lang in TGT_LANG_CODES:
+            if tgt_lang == src_lang:
+                continue
+
+            tgt_name = LANG_NAME.get
+            tgt_name = LANG_NAME.get(tgt_lang, tgt_lang)
+            tgt_dir = LANG_DIRNAME.get(tgt_lang, tgt_lang)
+
+            tgt_data = load_flores_sentences(tgt_lang)
+            tgt_dev = tgt_data["dev"]
+
+            if use_fragment_shot:
+                pools = build_fragmentshot_pools(
+                    src_dev=src_dev,
+                    tgt_dev=tgt_dev,
+                    src_devtest=src_devtest,
+                    k_min=M_PER_MODEL,
+                    max_fragment_size=FRAGMENTSHOT_MAX_FRAGMENT_SIZE,
+                    overlaps=FRAGMENTSHOT_OVERLAPS,
+                )
+
+                per_method_idx_m: Dict[str, np.ndarray] = {}
+                for m in EMB_METHODS:
+                    dev_emb, devtest_emb_full = emb_full[m]
+                    devtest_emb = devtest_emb_full[:n_devtest, :]
+                    idx = topk_cosine_indices_from_pools(
+                        dev_emb,
+                        devtest_emb,
+                        pools,
+                        M_PER_MODEL,
+                        device=DEVICE,
+                        torch_dtype=TORCH_DTYPE,
+                    )
+                    per_method_idx_m[m] = idx
+            else:
+                per_method_idx_m = per_method_idx_m_full
+
+            overlap_mat, meanrank_mat, method_labels = compute_pairwise_overlap_and_meanrank(per_method_idx_m, K_MAX)
+            _ensure_dir(ANALYSIS_DIR)
+            overlap_png = os.path.join(ANALYSIS_DIR, f"{src_dir}_to_{tgt_dir}_overlap_k{K_MAX}_{ENSEMBLE_METHOD}.png")
+            meanrank_png = os.path.join(ANALYSIS_DIR, f"{src_dir}_to_{tgt_dir}_meanrank_k{K_MAX}_{ENSEMBLE_METHOD}.png")
+            _plot_matrix_png(overlap_mat, method_labels, f"Avg overlap (Top-{K_MAX}) {src_dir}->{tgt_dir}", overlap_png, ".2f", vmin=0, vmax=K_MAX)
+            _plot_matrix_png(meanrank_mat, method_labels, f"Avg mean-rank (Top-{K_MAX}) {src_dir}->{tgt_dir}", meanrank_png, ".2f", vmin=1, vmax=K_MAX)
+
+            final_indices_by_k: Dict[int, List[List[int]]] = {}
+            for k in K_LIST:
+                if k == 0:
+                    final_indices_by_k[k] = [[] for _ in range(n_devtest)]
+                    continue
+
+                per_idx_k = {m: per_method_idx_m[m][:, :k] for m in EMB_METHODS}
+                final_indices_by_k[k] = ensemble_topk_dispatch(
+                    ensemble_submethod,
+                    per_idx_k,
+                    EMB_METHODS,
+                    k,
+                    rrf_k0=RRF_K0,
+                    bm25_devtest_scores=bm25_devtest_scores,
+                    random_selection_path=random_selection_path,
+                    random_source_idx=per_method_idx_m,
+                    random_dev_size=len(src_dev),
+                    sentinel_src_scores=sentinel_src_scores,
+                )
+
+            direction_dir = f"{src_dir}_to_{tgt_dir}"
+            jobs.append(
+                {
+                    "src_lang": src_lang,
+                    "tgt_lang": tgt_lang,
+                    "src_name": src_name,
+                    "tgt_name": tgt_name,
+                    "direction_dir": direction_dir,
+                    "src_dev": src_dev,
+                    "src_devtest": src_devtest,
+                    "tgt_dev": tgt_dev,
+                    "final_indices_by_k": final_indices_by_k,
+                }
+            )
+
+    for i, (llm_key, model_id, reasoning_parser) in enumerate(reasoning_model_specs):
+        port = int(VLLM_PORT_BASE) + int(i)
+
+        spec = VLLMServerSpec(
+            model_key=llm_key,
+            model_id=model_id,
+            port=port,
+            reasoning_parser= None if not ENABLE_REASONING else reasoning_parser,
+            tensor_parallel_size=tp,
+            gpu_memory_utilization=0.90,
+            max_model_len=MAX_MODEL_LEN,
+        )
+
+        log_reasoning_traces_this_model = bool(LOG_REASONING_TRACES) and (reasoning_parser is not None)
+
+        system_prompt = load_system_prompt(model_id, 'SYSTEM_PROMPT.txt') if SYSTEM_PROMPT else None
+
+        extra_body = {"top_k": TOP_K, "min_p": MIN_P}
+        if reasoning_parser == "qwen3":
+            extra_body["chat_template_kwargs"] = {"enable_thinking": bool(ENABLE_REASONING)}
+        elif reasoning_parser != "mistral":
+            extra_body["chat_template_kwargs"] = {"thinking": bool(ENABLE_REASONING)}
+
+        with VLLMServerProcess(
+            spec,
+            host=VLLM_SERVER_HOST,
+            log_dir=VLLM_SERVER_LOG_DIR,
+            start_timeout_s=VLLM_SERVER_START_TIMEOUT_S,
+            poll_interval_s=VLLM_SERVER_POLL_INTERVAL_S,
+            openai_api_key=OPENAI_API_KEY,
+        ) as server:
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=server.base_url)
+            served_model_id = get_served_model_id(client)
+
+            for job in jobs:
+                direction_dir = str(job["direction_dir"])
+                src_lang = str(job["src_lang"])
+                tgt_lang = str(job["tgt_lang"])
+                src_name = str(job["src_name"])
+                tgt_name = str(job["tgt_name"])
+                src_dev = job["src_dev"]  # type: ignore[assignment]
+                src_devtest = job["src_devtest"]  # type: ignore[assignment]
+                tgt_dev = job["tgt_dev"]  # type: ignore[assignment]
+                final_indices_by_k = job["final_indices_by_k"]  # type: ignore[assignment]
+
+                for k in K_LIST:
+                    out_dir = os.path.join(GEN_ROOT, llm_key, direction_dir)
+                    out_path = os.path.join(out_dir, f"k{k}_{ENSEMBLE_METHOD}_template11.jsonl")
+
+                    r_dir = os.path.join(REASONING_ROOT, llm_key, direction_dir)
+                    r_path = os.path.join(r_dir, f"k{k}_{ENSEMBLE_METHOD}_template11_reasoning.jsonl")
+
+                    run_openai_for_direction_streaming(
+                        client,
+                        served_model_id=served_model_id,
+                        model_key=llm_key,
+                        src_lang_code=src_lang,
+                        tgt_lang_code=tgt_lang,
+                        k=k,
+                        src_dev=src_dev,
+                        src_devtest=src_devtest,
+                        tgt_dev=tgt_dev,
+                        dev_indices_per_devtest=final_indices_by_k[k],
+                        out_jsonl_path=out_path,
+                        out_reasoning_jsonl_path=r_path,
+                        request_batch_size=REQUEST_BATCH_SIZE,
+                        temperature=TEMPERATURE,
+                        top_p=TOP_P,
+                        max_new_tokens=MAX_NEW_TOKENS,
+                        stop_sequences=STOP_SEQUENCES,
+                        extra_body=extra_body,
+                        log_reasoning_traces=log_reasoning_traces_this_model,
+                        prompt_header=PROMPT_HEADER,
+                        src_name=src_name,
+                        tgt_name=tgt_name,
+                        system_prompt=system_prompt,
+                        skip_existing_translations=SKIP_EXISTING_TRANSLATIONS,
+                        max_retries=MAX_TRANSLATION_RETRIES,
+                    )
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    print("Done.")
+
+
+main()

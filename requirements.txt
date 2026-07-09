@@ -1,0 +1,34 @@
+# Core scientific stack
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+statsmodels
+
+# Deep-learning / model infra
+torch
+transformers>=4.45
+mistral-common>=1.8.6
+datasets>=2.18,<3.0
+huggingface_hub
+
+# Retrieval / embeddings
+cohere
+sentence-transformers
+rank_bm25
+
+# Generation
+vllm
+openai
+
+# Metrics
+sacrebleu>=2.0.0
+unbabel-comet
+fasttext
+
+# Prompt building
+fragmentshot
+
+# Env / secrets
+python-dotenv

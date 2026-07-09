@@ -1,0 +1,44 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Secrets ---
+.env
+.env.*
+
+# --- Notebook clutter ---
+.ipynb_checkpoints/
+
+# --- Pipeline artefacts (large; regenerate on demand) ---
+flores_embeddings/
+flores_embeddings.zip
+generations_vllm/
+generations_non_reasoning_vllm/
+reasoning_traces_*/
+retrieval_overlap_analysis/
+drive/
+eval_pipeline_out/
+chrfpp_per_sentence_analysis/
+paired_bootstrap*/
+eval_token_counts/
+trace_example_recall/
+
+# --- vLLM / server logs ---
+vllm_logs/
+*.log
