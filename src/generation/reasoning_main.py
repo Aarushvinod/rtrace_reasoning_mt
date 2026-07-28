@@ -26,17 +26,56 @@ from typing import Dict, List, Tuple, Optional
 
 from openai import OpenAI
 
+from src.retrieval.retrieval_helpers import (
+    _apply_devtest_limit,
+    _ensure_dir,
+    _plot_matrix_png,
+    build_fragmentshot_pools,
+    compute_pairwise_overlap_and_meanrank,
+    ensemble_topk_dispatch,
+    load_flores_sentences,
+    load_retrieval_embeddings,
+    load_sentinel_src_scores,
+    parse_ensemble_method,
+    topk_cosine_indices_and_scores,
+    topk_cosine_indices_from_pools,
+)
+from src.generation.vllm_server import (
+    VLLMServerProcess,
+    VLLMServerSpec,
+    get_served_model_id,
+    load_system_prompt,
+    run_openai_for_direction_streaming,
+)
+from src.data.wmt24pp import WMT_TGT_LANGS, load_wmt24pp_sentences
+
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 os.environ["HUGGINGFACE_HUB_TOKEN"] = HF_TOKEN
 
 OPENAI_API_KEY = "EMPTY"
 
-EMB_ROOT = "drive/MyDrive/flores_embeddings"
+# ── Env-driven run configuration ─────────────────────────────────────────────
+# Every knob a SLURM job needs is settable via RTRACE_* environment variables,
+# with defaults preserving the original notebook values. One sbatch job =
+# one (model, method, reasoning state, dataset) cell of the experiment grid.
+
+# DATASET: "flores" (dev pool = 997, devtest test = first 100) or "wmt24pp"
+# (fixed committed split: pool = 860, test = 100; see data/wmt24pp_split.json).
+DATASET = os.environ.get("RTRACE_DATASET", "flores").lower()
+if DATASET not in ("flores", "wmt24pp"):
+    raise ValueError(f"RTRACE_DATASET must be 'flores' or 'wmt24pp', got {DATASET!r}")
+
+# DATASET_LOADER: returns {"dev": [...], "devtest": [...]} for a lang code —
+# identical contract for both datasets, so main() below is dataset-agnostic.
+DATASET_LOADER = load_wmt24pp_sentences if DATASET == "wmt24pp" else load_flores_sentences
+
+_DEFAULT_EMB_ROOT = "wmt24pp_embeddings" if DATASET == "wmt24pp" else "drive/MyDrive/flores_embeddings"
+EMB_ROOT = os.environ.get("RTRACE_EMB_ROOT", _DEFAULT_EMB_ROOT)
 BM25_METHOD_NAME = "bm25"
 
 SRC_LANG_CODES: List[str] = ["eng_Latn"]
 
-TGT_LANG_CODES: List[str] = [
+_FLORES_TGT_LANGS: List[str] = [
     "wol_Latn",
     "swh_Latn",
     "lus_Latn",
@@ -44,6 +83,10 @@ TGT_LANG_CODES: List[str] = [
     "tel_Telu",
     "tam_Taml",
     "uzn_Latn",
+]
+_DEFAULT_TGTS = WMT_TGT_LANGS if DATASET == "wmt24pp" else _FLORES_TGT_LANGS
+TGT_LANG_CODES: List[str] = [
+    s.strip() for s in os.environ.get("RTRACE_TGT_LANGS", ",".join(_DEFAULT_TGTS)).split(",") if s.strip()
 ]
 
 LANG_NAME: Dict[str, str] = {
@@ -68,14 +111,14 @@ LANG_DIRNAME: Dict[str, str] = {
     "uzn_Latn": "uzn",
 }
 
-K_LIST = [1, 3, 5, 7, 10]
+K_LIST = [int(k) for k in os.environ.get("RTRACE_K_LIST", "1,3,5,7,10").split(",")]
 K_LIST = sorted(set(int(k) for k in K_LIST))
 K_MAX = max(K_LIST) if K_LIST else 0
 
 M_PER_MODEL = K_MAX
 
 EMB_METHODS = ["cohere", "sonar", "labse", "MiniLM", "e5"]
-ENSEMBLE_METHOD = "edit_dist"
+ENSEMBLE_METHOD = os.environ.get("RTRACE_METHOD", "edit_dist")
 RRF_K0 = 60
 
 FRAGMENTSHOT_MAX_FRAGMENT_SIZE = 5
@@ -83,17 +126,28 @@ FRAGMENTSHOT_OVERLAPS = False
 
 DEVTEST_N: Optional[int] = 100
 
-# ── HuggingFace-recommended sampling params for Qwen3 non-thinking mode.
+# ── Reasoning state comes first: sampling + budget defaults depend on it.
+#    on → ENABLE_REASONING + reasoning traces logged; off → plain decoding.
+_REASONING_STATE = os.environ.get("RTRACE_REASONING", "off").lower()
+if _REASONING_STATE not in ("on", "off"):
+    raise ValueError(f"RTRACE_REASONING must be 'on' or 'off', got {_REASONING_STATE!r}")
+_REASONING_ON = _REASONING_STATE == "on"
+
+# ── HuggingFace-recommended sampling params for Qwen3.
 #    Same values across Qwen3-8B / Qwen3-14B / Qwen3-32B per the official
-#    model cards (Qwen/Qwen3-{8B,14B,32B}). For thinking mode the recipe is
-#    temperature=0.6 + top_p=0.95; for non-thinking it's 0.7 + 0.8.
+#    model cards (Qwen/Qwen3-{8B,14B,32B}): thinking mode is
+#    temperature=0.6 + top_p=0.95; non-thinking is 0.7 + 0.8. Defaults follow
+#    the reasoning state; override per-family via env (e.g. Mistral reasoning
+#    runs use temperature=0.7 + top_p=0.95 per the Magistral model card).
+#    Reasoning runs also need a far larger token budget (traces reach ~30k
+#    tokens in our earlier runs), hence the state-dependent defaults below.
 REQUEST_BATCH_SIZE = 32
-MAX_NEW_TOKENS = 256
-TEMPERATURE = 0.7
-TOP_P = 0.8
+MAX_NEW_TOKENS = int(os.environ.get("RTRACE_MAX_NEW_TOKENS", "32768" if _REASONING_ON else "256"))
+TEMPERATURE = float(os.environ.get("RTRACE_TEMPERATURE", "0.6" if _REASONING_ON else "0.7"))
+TOP_P = float(os.environ.get("RTRACE_TOP_P", "0.95" if _REASONING_ON else "0.8"))
 TOP_K = 20
 MIN_P = 0
-MAX_MODEL_LEN = 8192
+MAX_MODEL_LEN = int(os.environ.get("RTRACE_MAX_MODEL_LEN", "40960" if _REASONING_ON else "8192"))
 STOP_SEQUENCES = []
 
 PROMPT_HEADER = (
@@ -101,11 +155,15 @@ PROMPT_HEADER = (
     ' You should reason over the demonstration sentences provided to you below, using them as a guide to accurately translate the final sentence.'
     ' Your final response should be the translation of the final untranslated src sentence to the tgt language with no other words or characters accompanying the translation.\n'
 )
-SYSTEM_PROMPT = False
+# SYSTEM_PROMPT: when True, the model's own SYSTEM_PROMPT.txt is fetched from
+# its HF repo and prepended (Mistral's reasoning recipe). Resolved per-model
+# inside main(): defaults to True for the Mistral family when reasoning is on,
+# False otherwise; RTRACE_SYSTEM_PROMPT=0/1 forces it globally.
+_SYSTEM_PROMPT_ENV = os.environ.get("RTRACE_SYSTEM_PROMPT", "")
 
-GEN_ROOT = "drive/MyDrive/Qwen_All_Reasoning_Off_edit_dist"
-REASONING_ROOT = "drive/MyDrive/reasoning_traces_Qwen_dummy"
-ANALYSIS_DIR = "retrieval_overlap_analysis"
+GEN_ROOT = os.environ.get("RTRACE_GEN_ROOT", "drive/MyDrive/Qwen_All_Reasoning_Off_edit_dist")
+REASONING_ROOT = os.environ.get("RTRACE_REASONING_ROOT", "drive/MyDrive/reasoning_traces_Qwen_dummy")
+ANALYSIS_DIR = os.environ.get("RTRACE_ANALYSIS_DIR", "retrieval_overlap_analysis")
 
 # -----------------------------------------------------------------------
 # When True:  sentences that already have a non-empty translation in the
@@ -136,17 +194,38 @@ VLLM_SERVER_START_TIMEOUT_S = 600
 VLLM_SERVER_POLL_INTERVAL_S = 1.0
 VLLM_SERVER_LOG_DIR = "vllm_server_logs"
 
-LOG_REASONING_TRACES = False
-ENABLE_REASONING = False
+LOG_REASONING_TRACES = _REASONING_ON
+ENABLE_REASONING = _REASONING_ON
 
 RANDOM_SELECTION_FILEPATHS: List[str] = [
-    "drive/MyDrive/random_pool_selections/eng_random_pool.json",
+    os.environ.get(
+        "RTRACE_RANDOM_POOL",
+        "drive/MyDrive/random_pool_selections/eng_random_pool.json",
+    ),
 ]
 
+# MODEL_REGISTRY: every model in the study → (HF model id, reasoning parser,
+# family). Parser names follow vLLM's --reasoning-parser; ids match the
+# tokenizer registry in token_count_inference_budget.py.
+MODEL_REGISTRY: Dict[str, Tuple[str, str, str]] = {
+    "qwen3_8b":        ("Qwen/Qwen3-8B",  "qwen3",   "qwen"),
+    "qwen3_14b":       ("Qwen/Qwen3-14B", "qwen3",   "qwen"),
+    "qwen3_32b":       ("Qwen/Qwen3-32B", "qwen3",   "qwen"),
+    "ministral_8b":    ("mistralai/Ministral-3-8B-Reasoning-2512",  "mistral", "mistral"),
+    "ministral_14b":   ("mistralai/Ministral-3-14B-Reasoning-2512", "mistral", "mistral"),
+    "magistral_small": ("mistralai/Magistral-Small-2509",           "mistral", "mistral"),
+}
+
+# RTRACE_MODELS: comma-separated model keys to run in this job (default: all).
+_SELECTED_MODELS = [
+    s.strip() for s in os.environ.get("RTRACE_MODELS", ",".join(MODEL_REGISTRY)).split(",") if s.strip()
+]
+for _mk in _SELECTED_MODELS:
+    if _mk not in MODEL_REGISTRY:
+        raise ValueError(f"Unknown model key in RTRACE_MODELS: {_mk!r} (known: {sorted(MODEL_REGISTRY)})")
+
 reasoning_model_specs: List[Tuple[str, str, Optional[str]]] = [
-    ("qwen3_8b",  "Qwen/Qwen3-8B",  None),
-    ("qwen3_14b", "Qwen/Qwen3-14B", None),
-    ("qwen3_32b", "Qwen/Qwen3-32B", None),
+    (mk, MODEL_REGISTRY[mk][0], MODEL_REGISTRY[mk][1]) for mk in _SELECTED_MODELS
 ]
 
 
@@ -180,7 +259,7 @@ def main() -> None:
         else:
             random_selection_path = None
 
-        src_data = load_flores_sentences(src_lang)
+        src_data = DATASET_LOADER(src_lang)
         src_dev = src_data["dev"]
         src_devtest_full = src_data["devtest"]
         src_devtest = _apply_devtest_limit(src_devtest_full, DEVTEST_N)
@@ -239,7 +318,7 @@ def main() -> None:
             tgt_name = LANG_NAME.get(tgt_lang, tgt_lang)
             tgt_dir = LANG_DIRNAME.get(tgt_lang, tgt_lang)
 
-            tgt_data = load_flores_sentences(tgt_lang)
+            tgt_data = DATASET_LOADER(tgt_lang)
             tgt_dev = tgt_data["dev"]
 
             if use_fragment_shot:
@@ -325,7 +404,15 @@ def main() -> None:
 
         log_reasoning_traces_this_model = bool(LOG_REASONING_TRACES) and (reasoning_parser is not None)
 
-        system_prompt = load_system_prompt(model_id, 'SYSTEM_PROMPT.txt') if SYSTEM_PROMPT else None
+        # Mistral's reasoning recipe injects the model's own SYSTEM_PROMPT.txt
+        # (with its [THINK] scaffold); Qwen3 needs no system prompt. Env var
+        # RTRACE_SYSTEM_PROMPT=0/1 overrides the family default globally.
+        family = MODEL_REGISTRY[llm_key][2]
+        if _SYSTEM_PROMPT_ENV != "":
+            use_system_prompt = bool(int(_SYSTEM_PROMPT_ENV))
+        else:
+            use_system_prompt = (family == "mistral") and ENABLE_REASONING
+        system_prompt = load_system_prompt(model_id, 'SYSTEM_PROMPT.txt') if use_system_prompt else None
 
         extra_body = {"top_k": TOP_K, "min_p": MIN_P}
         if reasoning_parser == "qwen3":
@@ -396,4 +483,5 @@ def main() -> None:
     print("Done.")
 
 
-main()
+if __name__ == "__main__":
+    main()

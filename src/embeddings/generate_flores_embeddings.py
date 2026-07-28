@@ -558,4 +558,8 @@ def main() -> None:
         torch.cuda.empty_cache()
 
 
-main()
+# Guarded so this module is importable (generate_wmt24pp_embeddings.py reuses
+# the embed_* / bm25 / sentinel functions); behavior when run as a script is
+# unchanged.
+if __name__ == "__main__":
+    main()

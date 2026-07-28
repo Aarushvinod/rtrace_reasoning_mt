@@ -32,3 +32,7 @@ fragmentshot
 
 # Env / secrets
 python-dotenv
+
+# Embedding backends (SONAR for retrieval embeddings; sentinel_metric comes
+# from the guardians-mt-eval git checkout in setup.sh, not PyPI)
+sonar-space

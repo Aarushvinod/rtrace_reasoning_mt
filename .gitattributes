@@ -1,0 +1,4 @@
+# SLURM/bash scripts must land on the cluster with LF endings regardless of
+# the OS this repo is checked out on.
+*.sh text eol=lf
+*.sbatch text eol=lf

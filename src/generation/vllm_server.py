@@ -13,6 +13,22 @@ Outputs: JSONL files with per-sentence `translation` and `reasoning_trace`
          fields, plus a subprocess log per server run.
 """
 
+import json
+import os
+import signal
+import subprocess
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
+from src.retrieval.retrieval_helpers import (
+    Template,
+    _ensure_dir,
+    generate_prompt_template11,
+    postprocess_generation,
+)
+
+
 def _load_existing_jsonl_field(path: str, field: str, n: int) -> List[Optional[str]]:
     """
     Purpose: Read up to n entries from an existing JSONL file and return the
@@ -411,6 +427,10 @@ def run_openai_for_direction(
                         print(f"[skip] sentence {global_idx} already translated.")
                         f_out.write(json.dumps({"translation": stored}, ensure_ascii=False) + "\n")
                         f_r.write(json.dumps({"reasoning": existing_reasoning[global_idx]}, ensure_ascii=False) + "\n")
+                        # Flush per line so a SLURM preemption (SIGKILL) never
+                        # loses previously-completed sentences to OS buffering.
+                        f_out.flush()
+                        f_r.flush()
                         continue
 
                 if local_j == 0:
@@ -463,6 +483,13 @@ def run_openai_for_direction(
                     f_r.write(json.dumps({"reasoning": reasoning_val}, ensure_ascii=False) + "\n")
                 else:
                     f_r.write(json.dumps({"reasoning": None}, ensure_ascii=False) + "\n")
+
+                # Flush after every completed sentence: on scavenger preemption
+                # the resume pass (skip_existing_translations=True) then finds
+                # every finished sentence on disk and only redoes the one that
+                # was mid-flight when the job was killed.
+                f_out.flush()
+                f_r.flush()
 
 
 def stream_reasoning_and_content_for_messages(
@@ -602,6 +629,10 @@ def run_openai_for_direction_streaming(
                         print(f"[skip] sentence {global_idx} already translated.")
                         f_out.write(json.dumps({"translation": stored}, ensure_ascii=False) + "\n")
                         f_r.write(json.dumps({"reasoning": existing_reasoning[global_idx]}, ensure_ascii=False) + "\n")
+                        # Flush per line so a SLURM preemption (SIGKILL) never
+                        # loses previously-completed sentences to OS buffering.
+                        f_out.flush()
+                        f_r.flush()
                         continue
 
                 if local_j == 0:
@@ -655,3 +686,10 @@ def run_openai_for_direction_streaming(
                     f_r.write(json.dumps({"reasoning": reasoning_val}, ensure_ascii=False) + "\n")
                 else:
                     f_r.write(json.dumps({"reasoning": None}, ensure_ascii=False) + "\n")
+
+                # Flush after every completed sentence: on scavenger preemption
+                # the resume pass (skip_existing_translations=True) then finds
+                # every finished sentence on disk and only redoes the one that
+                # was mid-flight when the job was killed.
+                f_out.flush()
+                f_r.flush()
