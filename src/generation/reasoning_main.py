@@ -98,6 +98,12 @@ LANG_NAME: Dict[str, str] = {
     "tel_Telu": "Telugu",
     "tam_Taml": "Tamil",
     "uzn_Latn": "Northern Uzbek",
+    # WMT24++ arm
+    "cat_Latn": "Catalan",
+    "zul_Latn": "Zulu",
+    "mal_Mlym": "Malayalam",
+    "slk_Latn": "Slovak",
+    "isl_Latn": "Icelandic",
 }
 
 LANG_DIRNAME: Dict[str, str] = {
@@ -109,6 +115,12 @@ LANG_DIRNAME: Dict[str, str] = {
     "tel_Telu": "tel",
     "tam_Taml": "tam",
     "uzn_Latn": "uzn",
+    # WMT24++ arm
+    "cat_Latn": "cat",
+    "zul_Latn": "zul",
+    "mal_Mlym": "mal",
+    "slk_Latn": "slk",
+    "isl_Latn": "isl",
 }
 
 K_LIST = [int(k) for k in os.environ.get("RTRACE_K_LIST", "1,3,5,7,10").split(",")]

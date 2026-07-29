@@ -9,13 +9,15 @@ read from data/wmt24pp_split.json (generated once by
 scripts/make_wmt24pp_split.py with seed 12345) so it is identical across every
 model, language, k, and reasoning run.
 
-WMT24++ is en→xx only and covers 3 of our 7 target languages:
-  swh_Latn → en-sw_TZ (Tanzanian Swahili, dialect-consistent with FLORES swh;
-             override with RTRACE_WMT_SWH_CONFIG=en-sw_KE if desired)
-  tam_Taml → en-ta_IN
-  tel_Telu → en-te_IN
+WMT24++ is en→xx only. The evaluated targets for the WMT24++ arm are:
+  cat_Latn → en-ca_ES (Catalan)
+  zul_Latn → en-zu_ZA (Zulu)
+  mal_Mlym → en-ml_IN (Malayalam)
+  slk_Latn → en-sk_SK (Slovak)
+  isl_Latn → en-is_IS (Icelandic)
 English source sentences are identical across configs (verified at split
-generation), so the "eng_Latn" side is loaded from any target config.
+generation), so the "eng_Latn" side is loaded from any target config, and the
+committed split's segment ids are language-independent.
 
 Inputs:  lang_code in {eng_Latn, swh_Latn, tam_Taml, tel_Telu}; the committed
          split JSON; HuggingFace `datasets` (downloads google/wmt24pp).
@@ -30,11 +32,13 @@ from typing import Dict, List
 # WMT_DATASET_ID: HuggingFace dataset id for WMT24++.
 WMT_DATASET_ID = "google/wmt24pp"
 
-# WMT_CONFIG_FOR_LANG: our FLORES-style lang codes → WMT24++ config names.
+# WMT_CONFIG_FOR_LANG: FLORES-style lang codes → WMT24++ config names.
 WMT_CONFIG_FOR_LANG: Dict[str, str] = {
-    "swh_Latn": os.environ.get("RTRACE_WMT_SWH_CONFIG", "en-sw_TZ"),
-    "tam_Taml": "en-ta_IN",
-    "tel_Telu": "en-te_IN",
+    "cat_Latn": "en-ca_ES",
+    "zul_Latn": "en-zu_ZA",
+    "mal_Mlym": "en-ml_IN",
+    "slk_Latn": "en-sk_SK",
+    "isl_Latn": "en-is_IS",
 }
 
 # WMT_TGT_LANGS: the subset of our target languages WMT24++ covers.

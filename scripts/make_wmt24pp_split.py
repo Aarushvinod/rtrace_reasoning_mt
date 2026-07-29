@@ -33,7 +33,7 @@ N_TEST = 100
 EXPECTED_ROWS = 998
 # CONFIGS: every WMT24++ config our experiments touch (superset is fine — the
 # split is over segment_ids, which are shared across configs).
-CONFIGS = ["en-sw_TZ", "en-sw_KE", "en-ta_IN", "en-te_IN"]
+CONFIGS = ["en-ca_ES", "en-zu_ZA", "en-ml_IN", "en-sk_SK", "en-is_IS"]
 # OUT_PATH: where the committed split file lands (repo-relative).
 OUT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "wmt24pp_split.json")
 

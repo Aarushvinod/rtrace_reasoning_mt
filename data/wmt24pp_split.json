@@ -3,10 +3,11 @@
  "seed": 12345,
  "expected_rows_per_config": 998,
  "configs_verified": [
-  "en-sw_TZ",
-  "en-sw_KE",
-  "en-ta_IN",
-  "en-te_IN"
+  "en-ca_ES",
+  "en-zu_ZA",
+  "en-ml_IN",
+  "en-sk_SK",
+  "en-is_IS"
  ],
  "n_bad_source_excluded": 38,
  "bad_source_segment_ids": [
