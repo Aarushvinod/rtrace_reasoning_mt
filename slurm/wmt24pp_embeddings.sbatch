@@ -23,6 +23,16 @@
 
 set -euo pipefail
 
+# Secrets: the cohere embedding method REQUIRES COHERE_API_KEY; sourced from
+# the gitignored env file (.env at repo root, or RTRACE_ENV_FILE).
+ENV_FILE="${RTRACE_ENV_FILE:-.env}"
+if [ -f "$ENV_FILE" ]; then
+  set -a; . "$ENV_FILE"; set +a
+fi
+if [ -z "${COHERE_API_KEY:-}" ]; then
+  echo "FATAL: COHERE_API_KEY not set — the cohere method cannot run. Place your env file at .env or set RTRACE_ENV_FILE."; exit 3
+fi
+
 OUT_BASE="${RTRACE_OUT_BASE:-runs}"
 export RTRACE_WMT_EMB_ROOT="${RTRACE_WMT_EMB_ROOT:-$OUT_BASE/wmt24pp_embeddings}"
 export HF_HOME="${HF_HOME:-$OUT_BASE/hf_cache}"

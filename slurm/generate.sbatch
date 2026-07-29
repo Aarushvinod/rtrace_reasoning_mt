@@ -39,6 +39,13 @@ else
   METHODS_LIST="${METHODS_ARG//,/ }"
 fi
 
+# Secrets (COHERE_API_KEY, HF_TOKEN) come from an env file that lives OUTSIDE
+# git (.env is gitignored; chmod 600 it on the cluster). Never inline keys here.
+ENV_FILE="${RTRACE_ENV_FILE:-.env}"
+if [ -f "$ENV_FILE" ]; then
+  set -a; . "$ENV_FILE"; set +a
+fi
+
 # OUT_BASE: shared-filesystem root for all run artifacts (JSONLs, traces).
 # Point this at lab storage (e.g. /fs/clip-scratch/$USER/rtrace) — NOT /tmp.
 OUT_BASE="${RTRACE_OUT_BASE:-runs}"

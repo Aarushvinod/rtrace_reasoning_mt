@@ -45,6 +45,12 @@ else
   METHODS_LIST="${METHODS_ARG//,/ }"
 fi
 
+# Secrets (HF_TOKEN for gated Mistral repos) from the gitignored env file.
+ENV_FILE="${RTRACE_ENV_FILE:-.env}"
+if [ -f "$ENV_FILE" ]; then
+  set -a; . "$ENV_FILE"; set +a
+fi
+
 OUT_BASE="${RTRACE_OUT_BASE:-runs}"
 
 echo "=== attempt $(date -Is) job=$SLURM_JOB_ID node=$(hostname) ==="
