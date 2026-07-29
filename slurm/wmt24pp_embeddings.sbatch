@@ -23,6 +23,14 @@
 
 set -euo pipefail
 
+# Python env: embeddings use the SEPARATE .venv-emb (sonar-space/fairseq2 caps
+# torch; incompatible with the vLLM stack in .venv).
+module load "${RTRACE_PYTHON_MODULE:-Python3/3.11.11}" 2>/dev/null || true
+VENV="${RTRACE_VENV:-.venv-emb}"
+if [ -f "$VENV/bin/activate" ]; then
+  . "$VENV/bin/activate"
+fi
+
 # Secrets: the cohere embedding method REQUIRES COHERE_API_KEY; sourced from
 # the gitignored env file (.env at repo root, or RTRACE_ENV_FILE).
 ENV_FILE="${RTRACE_ENV_FILE:-.env}"

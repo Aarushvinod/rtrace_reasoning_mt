@@ -39,6 +39,15 @@ else
   METHODS_LIST="${METHODS_ARG//,/ }"
 fi
 
+# Python env: self-contained so requeued attempts (possibly submitted from a
+# dead shell) always resolve the same interpreter. Generation uses .venv
+# (vLLM stack); override with RTRACE_VENV.
+module load "${RTRACE_PYTHON_MODULE:-Python3/3.11.11}" 2>/dev/null || true
+VENV="${RTRACE_VENV:-.venv}"
+if [ -f "$VENV/bin/activate" ]; then
+  . "$VENV/bin/activate"
+fi
+
 # Secrets (COHERE_API_KEY, HF_TOKEN) come from an env file that lives OUTSIDE
 # git (.env is gitignored; chmod 600 it on the cluster). Never inline keys here.
 ENV_FILE="${RTRACE_ENV_FILE:-.env}"

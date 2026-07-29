@@ -1,0 +1,17 @@
+# Generation-env requirements (install AFTER `pip install --only-binary=:all: vllm`,
+# which brings its own torch + CUDA wheels). Used by generate.sbatch /
+# generate_langpar.sbatch. Eval-only packages (comet, fasttext, statsmodels,
+# sacrebleu, seaborn) deliberately excluded — they conflict with modern vLLM
+# torch pins and generation never imports them.
+numpy
+matplotlib
+transformers>=4.45
+mistral-common>=1.8.6
+datasets>=2.18,<3.0
+huggingface_hub
+openai
+cohere
+sentence-transformers
+rank_bm25
+fragmentshot
+python-dotenv

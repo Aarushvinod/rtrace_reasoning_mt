@@ -47,6 +47,13 @@ else
   METHODS_LIST="${METHODS_ARG//,/ }"
 fi
 
+# Python env: self-contained (see generate.sbatch). Generation uses .venv.
+module load "${RTRACE_PYTHON_MODULE:-Python3/3.11.11}" 2>/dev/null || true
+VENV="${RTRACE_VENV:-.venv}"
+if [ -f "$VENV/bin/activate" ]; then
+  . "$VENV/bin/activate"
+fi
+
 # Secrets (HF_TOKEN for gated Mistral repos) from the gitignored env file.
 ENV_FILE="${RTRACE_ENV_FILE:-.env}"
 if [ -f "$ENV_FILE" ]; then

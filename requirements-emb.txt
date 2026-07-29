@@ -1,0 +1,17 @@
+# Embeddings-env requirements (wmt24pp_embeddings.sbatch / FLORES embeddings).
+# Kept separate from the generation env because sonar-space -> fairseq2 caps
+# the torch version while vLLM floors it — the two stacks cannot coexist.
+# After installing this file, also run:
+#   git clone https://github.com/SapienzaNLP/guardians-mt-eval.git
+#   pip install -e guardians-mt-eval        # provides sentinel_metric
+numpy
+torch
+matplotlib
+datasets>=2.18,<3.0
+huggingface_hub
+sonar-space
+sentence-transformers
+transformers
+cohere
+rank_bm25
+python-dotenv

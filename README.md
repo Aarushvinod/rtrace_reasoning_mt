@@ -98,14 +98,34 @@ in-flight sentence.
 
 ### Quickstart on Nexus (repo in clip-scratch)
 
+The repo MUST live under `/fs/clip-scratch` (home quotas cannot hold the venvs
++ model caches), and needs TWO virtualenvs: `.venv` for generation (vLLM picks
+its own torch) and `.venv-emb` for embeddings (sonar-space→fairseq2 caps torch
+and cannot coexist with vLLM). Job scripts load `Python3/3.11.11` and activate
+the right venv themselves.
+
 ```bash
 cd /fs/clip-scratch/$USER
-git clone git@github.com:Aarushvinod/rtrace_reasoning_mt.git
+git clone https://github.com/Aarushvinod/rtrace_reasoning_mt.git
 cd rtrace_reasoning_mt
-# secrets (scp .env here separately; it is gitignored): chmod 600 .env
+# secrets (gitignored): create .env with COHERE_API_KEY + HF_TOKEN, chmod 600
+
+module load Python3/3.11.11
+
+# env 1 — generation (vLLM first, alone, wheels only):
 python3 -m venv .venv && source .venv/bin/activate
-pip install -U pip && pip install -r requirements.txt
-git clone https://github.com/SapienzaNLP/guardians-mt-eval.git && pip install -e guardians-mt-eval
+python -m pip install -U pip
+python -m pip install --only-binary=:all: vllm
+python -m pip install -r requirements-gen.txt
+deactivate
+
+# env 2 — embeddings (SONAR + Sentinel stack):
+python3 -m venv .venv-emb && source .venv-emb/bin/activate
+python -m pip install -U pip
+python -m pip install -r requirements-emb.txt
+git clone https://github.com/SapienzaNLP/guardians-mt-eval.git
+python -m pip install -e guardians-mt-eval
+deactivate
 
 # smoke test (embeddings + one cheap OFF job):
 MODELS="qwen3_8b" STATES="off" METHODS="rrf" bash slurm/submit_all_generation.sh wmt24pp
@@ -114,8 +134,8 @@ WMT_EMB_READY=1 bash slurm/submit_all_generation.sh wmt24pp
 ```
 
 With the repo under `/fs/clip-scratch`, the default `RTRACE_OUT_BASE=runs`
-already resolves to scratch storage (`<repo>/runs/`, gitignored) — no env var
-needed. Submit with the venv activated; jobs inherit the environment.
+already resolves to scratch storage (`<repo>/runs/`, gitignored) — no env
+vars needed at submit time; jobs are self-contained.
 
 ## Notes on the refactor
 
