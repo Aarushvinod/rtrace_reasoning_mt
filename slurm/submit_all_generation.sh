@@ -25,15 +25,25 @@ METHODS="${METHODS:-all}"        # passed INTO each job (csv or "all"), not fann
 STATES="${STATES:-on off}"
 SCAVENGER="${SCAVENGER:-0}"
 CLIP_ONLY="${CLIP_ONLY:-0}"
-# NGPU: GPUs per language-parallel job. 4 is safe for 4-GPU nodes; set 5 once
-# show_nodes confirms clip has >=5 A6000s on a single node.
-NGPU="${NGPU:-4}"
+# NGPU: GPUs per language-parallel job. 5 = one GPU per WMT24++ language.
+# Verified against show_nodes: scavenger has many nodes with >=5 free A6000s
+# (tron00-05 6-8/node, cml30 8, vulcan29-32/45 8, cbcb27 7); on clip ONLY
+# clip13 (8x A6000) can host a 5-GPU job (clip12 maxes at 4, clip05/06 at 2).
+NGPU="${NGPU:-5}"
 
-CLIP_LANGPAR=(--partition=clip --account=clip --qos=huge-long --gres=gpu:rtxa6000:"$NGPU")
+# LANGPAR default = scavenger typed-A6000: clip owns just 16 A6000s TOTAL
+# (2+2+4+8 across clip05/06/12/13), so four multi-GPU langpar jobs there would
+# monopolize the lab pool; scavenger's A6000 fleet is ~6x larger and our
+# preemption cost is <= 1 sentence per GPU stream.
 SCAV_LANGPAR=(--partition=scavenger --account=scavenger --qos=scavenger --gres=gpu:rtxa6000:"$NGPU")
+CLIP_LANGPAR=(--partition=clip --account=clip --qos=huge-long --gres=gpu:rtxa6000:"$NGPU")
 CLIP_1GPU_SHORT=(--partition=clip --account=clip --qos=default --gres=gpu:rtxa6000:1)
 CLIP_2GPU=(--partition=clip --account=clip --qos=huge-long --gres=gpu:rtxa6000:2)
 SCAV_1GPU=(--partition=scavenger --account=scavenger --qos=scavenger --gres=gpu:rtxa6000:1)
+# Hopper GRES names on Nexus are h100-nvl / h100-sxm / h200-sxm — never plain
+# "h100" — so we select by node FEATURE (Hopper) with an untyped gpu count.
+# Candidates: cml31 (h100-nvl 94GB), cml33 (4x h100-sxm 80GB), cml35/36 +
+# vulcan46 (8x h200-sxm 141GB each).
 SCAV_HOPPER=(--partition=scavenger --account=scavenger --qos=scavenger --constraint=Hopper --gres=gpu:1)
 
 is_big() { case "$1" in magistral_small|qwen3_32b) return 0 ;; *) return 1 ;; esac; }
@@ -51,8 +61,10 @@ for m in $MODELS; do
   for st in $STATES; do
     EXPORTS=""
     if [ "$st" = "on" ] && ! is_big "$m"; then
-      # small/medium ON: one language-parallel multi-GPU job per model
-      if [ "$SCAVENGER" = "1" ]; then FL=("${SCAV_LANGPAR[@]}"); else FL=("${CLIP_LANGPAR[@]}"); fi
+      # small/medium ON: one language-parallel multi-GPU job per model.
+      # Default scavenger (see routing note above); CLIP_ONLY forces clip,
+      # where only clip13 can host NGPU=5 — expect queueing.
+      if [ "$CLIP_ONLY" = "1" ]; then FL=("${CLIP_LANGPAR[@]}"); else FL=("${SCAV_LANGPAR[@]}"); fi
       jid=$(sbatch --parsable "${FL[@]}" "${DEP_FLAG[@]}" \
             --job-name="rt-${m}-on-${DATASET}" \
             slurm/generate_langpar.sbatch "$m" "$METHODS" "$DATASET")

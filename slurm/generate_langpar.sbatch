@@ -21,12 +21,14 @@
 #SBATCH --open-mode=append
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@300
-# Default routing = clip huge-long with 4x A6000 (safe if clip nodes are
-# 4-GPU; bump to :5 at submit time if show_nodes confirms >=5 GPUs/node).
-#SBATCH --partition=clip
-#SBATCH --account=clip
-#SBATCH --qos=huge-long
-#SBATCH --gres=gpu:rtxa6000:4
+# Default routing = scavenger typed-A6000 x5 (one GPU per WMT24++ language).
+# show_nodes: scavenger has many nodes with >=5 free A6000s (tron00-05,
+# cml30, vulcan29-32/45, cbcb27); on clip ONLY clip13 (8x) can host 5 GPUs —
+# clip's whole A6000 pool is 16 cards, so keep langpar off clip by default.
+#SBATCH --partition=scavenger
+#SBATCH --account=scavenger
+#SBATCH --qos=scavenger
+#SBATCH --gres=gpu:rtxa6000:5
 
 set -euo pipefail
 
