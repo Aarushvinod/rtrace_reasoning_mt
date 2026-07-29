@@ -16,7 +16,9 @@
 # Requires COHERE_API_KEY in .env (pass 1 fails fast without it).
 #
 #SBATCH --job-name=rtrace-wmt-emb
-#SBATCH --cpus-per-task=8
+# clip's default QoS caps jobs at 4 CPUs / 32GB / 1 GPU — stay inside it
+# (embedding is GPU/API-bound; 4 CPUs is plenty).
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
 #SBATCH --output=slurm-%x-%j.out

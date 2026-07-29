@@ -37,7 +37,9 @@ NGPU="${NGPU:-5}"
 # preemption cost is <= 1 sentence per GPU stream.
 SCAV_LANGPAR=(--partition=scavenger --account=scavenger --qos=scavenger --gres=gpu:rtxa6000:"$NGPU")
 CLIP_LANGPAR=(--partition=clip --account=clip --qos=huge-long --gres=gpu:rtxa6000:"$NGPU")
-CLIP_1GPU_SHORT=(--partition=clip --account=clip --qos=default --gres=gpu:rtxa6000:1)
+# medium QoS (8 CPU / 2 GPU / 64GB / 2d) — generate.sbatch asks 8 CPU + 64G,
+# which exceeds default QoS caps (4 CPU / 32GB).
+CLIP_1GPU_SHORT=(--partition=clip --account=clip --qos=medium --gres=gpu:rtxa6000:1)
 CLIP_2GPU=(--partition=clip --account=clip --qos=huge-long --gres=gpu:rtxa6000:2)
 SCAV_1GPU=(--partition=scavenger --account=scavenger --qos=scavenger --gres=gpu:rtxa6000:1)
 # Hopper GRES names on Nexus are h100-nvl / h100-sxm / h200-sxm — never plain
