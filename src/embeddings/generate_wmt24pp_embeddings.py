@@ -50,8 +50,20 @@ from src.embeddings.generate_flores_embeddings import (
 WMT_EMB_ROOT = os.environ.get("RTRACE_WMT_EMB_ROOT", "wmt24pp_embeddings")
 # SRC_LANG: the only embedded language — retrieval is English-source-side.
 SRC_LANG = "eng_Latn"
-# MODELS_TO_RUN: same method set as the FLORES script.
-MODELS_TO_RUN = ["sonar", "labse", "e5", "cohere", "MiniLM", "bm25"]
+# RTRACE_EMB_METHODS: csv filter over {sonar,labse,e5,cohere,MiniLM,bm25,
+# sentinel_src}. Exists because the SONAR stack (fairseq2n, numpy>=2.2) and
+# the Sentinel stack (unbabel-comet, numpy<2) cannot share one virtualenv —
+# the SLURM job runs this script twice: dense+bm25 methods in .venv-emb, then
+# sentinel_src alone in .venv-sent. Default runs everything (single-env case).
+_SELECTED = [
+    s.strip() for s in os.environ.get(
+        "RTRACE_EMB_METHODS", "sonar,labse,e5,cohere,MiniLM,bm25,sentinel_src"
+    ).split(",") if s.strip()
+]
+# MODELS_TO_RUN: same method set as the FLORES script, filtered by the env var.
+MODELS_TO_RUN = [m for m in ["sonar", "labse", "e5", "cohere", "MiniLM", "bm25"] if m in _SELECTED]
+# RUN_SENTINEL: whether this pass computes SENTINEL source-difficulty scores.
+RUN_SENTINEL = SENTINEL_METHOD_NAME in _SELECTED or "sentinel" in _SELECTED
 
 
 def _out_path(method: str, split: str) -> str:
@@ -75,6 +87,7 @@ def main() -> None:
     dev_sents = data["dev"]
     devtest_sents = data["devtest"]
     print(f"[wmt24pp] pool={len(dev_sents)} test={len(devtest_sents)} -> {WMT_EMB_ROOT}")
+    print(f"[wmt24pp] methods this pass: {MODELS_TO_RUN}  sentinel={RUN_SENTINEL}")
 
     model_fns = {
         "labse": lambda sents, lang=None: embed_labse(sents),
@@ -114,6 +127,10 @@ def main() -> None:
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    if not RUN_SENTINEL:
+        print("[wmt24pp] sentinel_src not selected for this pass; done.")
+        return
 
     sent_dev_path = _out_path(SENTINEL_METHOD_NAME, "dev")
     sent_devtest_path = _out_path(SENTINEL_METHOD_NAME, "devtest")

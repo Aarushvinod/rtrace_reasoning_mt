@@ -1,0 +1,8 @@
+# Sentinel-env requirements (.venv-sent) — the SENTINEL source-difficulty
+# scorer only. Kept apart from .venv-emb because unbabel-comet (a
+# sentinel_metric dependency) pins numpy<2 while SONAR's fairseq2n needs
+# numpy>=2.2. Install with:
+#   pip install -r requirements-sent.txt
+#   pip install -e guardians-mt-eval        # provides sentinel_metric + comet
+datasets>=2.18,<3.0
+python-dotenv

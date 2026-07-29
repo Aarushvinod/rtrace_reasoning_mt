@@ -1,13 +1,19 @@
 #!/bin/bash
-# Compute the WMT24++ English-side retrieval embeddings (sonar, labse, e5,
-# cohere, MiniLM, bm25 + sentinel_src) for the fixed 860-pool / 100-test split.
-# One short GPU job; every .bin is skipped if already on disk, so requeues and
-# reruns are free. Must finish before any wmt24pp generation job starts —
-# submit_all_generation.sh chains that dependency automatically.
+# Compute the WMT24++ English-side retrieval embeddings for the fixed
+# 860-pool / 100-test split, in TWO PASSES with different virtualenvs:
+#
+#   pass 1 (.venv-emb):  sonar, labse, e5, cohere, MiniLM, bm25
+#   pass 2 (.venv-sent): sentinel_src difficulty scores
+#
+# Two envs because the stacks are irreconcilable: SONAR's fairseq2n requires
+# numpy>=2.2 while Sentinel's unbabel-comet requires numpy<2. Every .bin is
+# skipped if already on disk, so requeues and reruns are free. Must finish
+# before any wmt24pp generation job starts — submit_all_generation.sh chains
+# that dependency automatically.
 #
 #   sbatch slurm/wmt24pp_embeddings.sbatch
 #
-# Requires COHERE_API_KEY in the submission environment (sbatch exports it).
+# Requires COHERE_API_KEY in .env (pass 1 fails fast without it).
 #
 #SBATCH --job-name=rtrace-wmt-emb
 #SBATCH --cpus-per-task=8
@@ -23,13 +29,7 @@
 
 set -euo pipefail
 
-# Python env: embeddings use the SEPARATE .venv-emb (sonar-space/fairseq2 caps
-# torch; incompatible with the vLLM stack in .venv).
 module load "${RTRACE_PYTHON_MODULE:-Python3/3.11.11}" 2>/dev/null || true
-VENV="${RTRACE_VENV:-.venv-emb}"
-if [ -f "$VENV/bin/activate" ]; then
-  . "$VENV/bin/activate"
-fi
 
 # Secrets: the cohere embedding method REQUIRES COHERE_API_KEY; sourced from
 # the gitignored env file (.env at repo root, or RTRACE_ENV_FILE).
@@ -49,4 +49,19 @@ echo "=== attempt $(date -Is) job=$SLURM_JOB_ID node=$(hostname) ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 echo "emb_root=$RTRACE_WMT_EMB_ROOT"
 
-srun python -u -m src.embeddings.generate_wmt24pp_embeddings
+# Pass 1 — dense retrieval methods + bm25 (SONAR stack env). Subshell keeps
+# each venv activation isolated.
+(
+  . "${RTRACE_VENV_EMB:-.venv-emb}/bin/activate"
+  export RTRACE_EMB_METHODS="sonar,labse,e5,cohere,MiniLM,bm25"
+  srun python -u -m src.embeddings.generate_wmt24pp_embeddings
+)
+
+# Pass 2 — SENTINEL source-difficulty scores (comet stack env).
+(
+  . "${RTRACE_VENV_SENT:-.venv-sent}/bin/activate"
+  export RTRACE_EMB_METHODS="sentinel_src"
+  srun python -u -m src.embeddings.generate_wmt24pp_embeddings
+)
+
+echo "both embedding passes complete."

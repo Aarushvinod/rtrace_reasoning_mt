@@ -1,9 +1,9 @@
-# Embeddings-env requirements (wmt24pp_embeddings.sbatch / FLORES embeddings).
+# Embeddings-env requirements (.venv-emb): dense retrieval + bm25 methods.
 # Kept separate from the generation env because sonar-space -> fairseq2 caps
 # the torch version while vLLM floors it — the two stacks cannot coexist.
-# After installing this file, also run:
-#   git clone https://github.com/SapienzaNLP/guardians-mt-eval.git
-#   pip install -e guardians-mt-eval        # provides sentinel_metric
+# Do NOT install guardians-mt-eval / sentinel here: unbabel-comet pins
+# numpy<2 while fairseq2n needs numpy>=2.2. Sentinel lives in .venv-sent
+# (see requirements-sent.txt); the embeddings SLURM job runs two passes.
 numpy
 torch
 matplotlib

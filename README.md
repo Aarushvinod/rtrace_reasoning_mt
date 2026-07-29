@@ -119,10 +119,16 @@ python -m pip install --only-binary=:all: vllm
 python -m pip install -r requirements-gen.txt
 deactivate
 
-# env 2 — embeddings (SONAR + Sentinel stack):
+# env 2 — embeddings (SONAR stack; numpy>=2.2 via fairseq2n):
 python3 -m venv .venv-emb && source .venv-emb/bin/activate
 python -m pip install -U pip
 python -m pip install -r requirements-emb.txt
+deactivate
+
+# env 3 — sentinel (comet stack; numpy<2 — incompatible with env 2):
+python3 -m venv .venv-sent && source .venv-sent/bin/activate
+python -m pip install -U pip
+python -m pip install -r requirements-sent.txt
 git clone https://github.com/SapienzaNLP/guardians-mt-eval.git
 python -m pip install -e guardians-mt-eval
 deactivate
