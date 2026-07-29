@@ -45,7 +45,8 @@ fi
 
 OUT_BASE="${RTRACE_OUT_BASE:-runs}"
 export RTRACE_WMT_EMB_ROOT="${RTRACE_WMT_EMB_ROOT:-$OUT_BASE/wmt24pp_embeddings}"
-export HF_HOME="${HF_HOME:-$OUT_BASE/hf_cache}"
+export HF_HOME="${RTRACE_HF_HOME:-$OUT_BASE/hf_cache}"
+export XDG_CACHE_HOME="${RTRACE_XDG_CACHE:-$OUT_BASE/xdg_cache}"
 
 echo "=== attempt $(date -Is) job=$SLURM_JOB_ID node=$(hostname) ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true

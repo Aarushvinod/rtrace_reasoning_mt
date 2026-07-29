@@ -98,7 +98,15 @@ if [ "$FAMILY" = "Mistral" ] && [ "$STATE" = "on" ]; then
   export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
   export RTRACE_TOP_P="${RTRACE_TOP_P:-0.95}"
 fi
-export HF_HOME="${HF_HOME:-$OUT_BASE/hf_cache}"
+# Caches PINNED to OUT_BASE (clip-scratch), deliberately ignoring any
+# login-shell HF_HOME — ambient values often point at the small nexus-scratch
+# quota, which cannot hold ~200GB of model weights (this exact failure mode
+# killed the first full submission). RTRACE_HF_HOME overrides intentionally.
+export HF_HOME="${RTRACE_HF_HOME:-$OUT_BASE/hf_cache}"
+# Compile caches (triton / vLLM torch.compile) default under ~/.cache — also
+# quota-constrained; route them to scratch too.
+export XDG_CACHE_HOME="${RTRACE_XDG_CACHE:-$OUT_BASE/xdg_cache}"
+export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
 
 # AUTO-RESUME: SIGUSR1 arrives 5 min before the wall; the trap requeues this
 # job. The restarted attempt re-runs the method loop from the top — completed

@@ -97,7 +97,11 @@ if [ "$FAMILY" = "Mistral" ]; then
   export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
   export RTRACE_TOP_P="${RTRACE_TOP_P:-0.95}"
 fi
-export HF_HOME="${HF_HOME:-$OUT_BASE/hf_cache}"
+# Caches PINNED to OUT_BASE — ambient HF_HOME (nexus-scratch quota) must not
+# leak into jobs; ~200GB of weights live here. See generate.sbatch.
+export HF_HOME="${RTRACE_HF_HOME:-$OUT_BASE/hf_cache}"
+export XDG_CACHE_HOME="${RTRACE_XDG_CACHE:-$OUT_BASE/xdg_cache}"
+export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
 
 # Language list: env override, else the dataset's default set.
 if [ -n "${RTRACE_TGT_LANGS:-}" ]; then
