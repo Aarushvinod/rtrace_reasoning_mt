@@ -201,7 +201,10 @@ TORCH_DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
 TOPK_SIM_CHUNK = 256
 
 VLLM_SERVER_HOST = "127.0.0.1"
-VLLM_PORT_BASE = 8000
+# RTRACE_PORT_BASE: overridable so (a) several single-GPU jobs sharing a node
+# and (b) several per-GPU server processes inside one language-parallel job
+# never race for the same port. SLURM scripts derive it from the job id.
+VLLM_PORT_BASE = int(os.environ.get("RTRACE_PORT_BASE", "8000"))
 VLLM_SERVER_START_TIMEOUT_S = 600
 VLLM_SERVER_POLL_INTERVAL_S = 1.0
 VLLM_SERVER_LOG_DIR = "vllm_server_logs"

@@ -91,6 +91,9 @@ fi
 # (possibly on a different node) reuse the same downloads.
 export HF_HOME="${HF_HOME:-$OUT_BASE/hf_cache}"
 
+# Node-unique vLLM port: two jobs sharing a node must not both bind 8000.
+export RTRACE_PORT_BASE=$(( 10000 + (SLURM_JOB_ID % 500) * 100 ))
+
 # AUTO-RESUME across the wall limit: SIGUSR1 arrives 5 min before timeout, the
 # trap requeues THIS job id, and the restarted attempt skips every sentence
 # already flushed to the output JSONLs (SKIP_EXISTING_TRANSLATIONS=True +
