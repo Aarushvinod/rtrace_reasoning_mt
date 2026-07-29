@@ -25,6 +25,12 @@ Thumbs.db
 # --- Notebook clutter ---
 .ipynb_checkpoints/
 
+# --- Cluster working dirs (repo lives in /fs/clip-scratch; runs/ is the
+# default RTRACE_OUT_BASE and holds all generated artefacts + HF cache) ---
+runs/
+guardians-mt-eval/
+slurm-*.out
+
 # --- Pipeline artefacts (large; regenerate on demand) ---
 flores_embeddings/
 flores_embeddings.zip

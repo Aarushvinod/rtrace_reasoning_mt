@@ -94,8 +94,28 @@ wall-clock USR1 trap + per-size GPU routing):
 Progress is never lost on preemption: every finished sentence is flushed to
 its JSONL immediately, and restarted attempts skip all non-empty stored
 translations (`SKIP_EXISTING_TRANSLATIONS=True`), re-doing at most the single
-in-flight sentence. Set `RTRACE_OUT_BASE` to shared storage (e.g.
-`/fs/clip-scratch/$USER/rtrace`) before submitting.
+in-flight sentence.
+
+### Quickstart on Nexus (repo in clip-scratch)
+
+```bash
+cd /fs/clip-scratch/$USER
+git clone git@github.com:Aarushvinod/rtrace_reasoning_mt.git
+cd rtrace_reasoning_mt
+# secrets (scp .env here separately; it is gitignored): chmod 600 .env
+python3 -m venv .venv && source .venv/bin/activate
+pip install -U pip && pip install -r requirements.txt
+git clone https://github.com/SapienzaNLP/guardians-mt-eval.git && pip install -e guardians-mt-eval
+
+# smoke test (embeddings + one cheap OFF job):
+MODELS="qwen3_8b" STATES="off" METHODS="rrf" bash slurm/submit_all_generation.sh wmt24pp
+# full grid (embeddings already on disk):
+WMT_EMB_READY=1 bash slurm/submit_all_generation.sh wmt24pp
+```
+
+With the repo under `/fs/clip-scratch`, the default `RTRACE_OUT_BASE=runs`
+already resolves to scratch storage (`<repo>/runs/`, gitignored) — no env var
+needed. Submit with the venv activated; jobs inherit the environment.
 
 ## Notes on the refactor
 
