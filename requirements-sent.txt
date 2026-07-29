@@ -6,3 +6,6 @@
 #   pip install -e guardians-mt-eval        # provides sentinel_metric + comet
 datasets>=2.18,<3.0
 python-dotenv
+# torchmetrics 0.10.3 (pinned via unbabel-comet) imports pkg_resources,
+# which setuptools removed in 81+ — cap it.
+setuptools<81
