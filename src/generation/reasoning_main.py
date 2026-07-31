@@ -158,7 +158,7 @@ _REASONING_ON = _REASONING_STATE == "on"
 #    Malayalam translations). Both states reserve the SAME 12,288 tokens of
 #    input headroom — prompts are identical across states, so a prompt must
 #    fit (or fail loudly) in both, never one-sided:
-#      ON : 16384 new tokens in a 28672 window (trace + translation)
+#      ON : 20480 new tokens in a 32768 window (trace + translation)
 #      OFF:  2048 new tokens in a 14336 window (longest segment ~800 EN
 #            tokens x ~2 target-token expansion fits comfortably)
 #    No per-request clamping — an overlong prompt fails the job loudly.
@@ -168,12 +168,12 @@ _REASONING_ON = _REASONING_STATE == "on"
 #    Traces exceeding the ON budget are truncated -> empty translation ->
 #    caught by the retry loop below.
 REQUEST_BATCH_SIZE = 32
-MAX_NEW_TOKENS = int(os.environ.get("RTRACE_MAX_NEW_TOKENS", "16384" if _REASONING_ON else "2048"))
+MAX_NEW_TOKENS = int(os.environ.get("RTRACE_MAX_NEW_TOKENS", "20480" if _REASONING_ON else "2048"))
 TEMPERATURE = float(os.environ.get("RTRACE_TEMPERATURE", "0.6" if _REASONING_ON else "0.7"))
 TOP_P = float(os.environ.get("RTRACE_TOP_P", "0.95" if _REASONING_ON else "0.8"))
 TOP_K = 20
 MIN_P = 0
-MAX_MODEL_LEN = int(os.environ.get("RTRACE_MAX_MODEL_LEN", "28672" if _REASONING_ON else "14336"))
+MAX_MODEL_LEN = int(os.environ.get("RTRACE_MAX_MODEL_LEN", "32768" if _REASONING_ON else "14336"))
 STOP_SEQUENCES = []
 
 PROMPT_HEADER = (
