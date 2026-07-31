@@ -16,6 +16,8 @@
 #   NGPU=5 bash slurm/submit_all_generation.sh wmt24pp  # 5 GPUs per langpar job
 #   SCAVENGER=1 ...                                     # small models to scavenger too
 #   CLIP_ONLY=1 ...                                     # big models to clip 2xA6000 TP=2
+#   TRON_SPREAD=1 ...                                   # spread small-ON langpar jobs
+#                                                       #   across tron lanes (see below)
 #   MODELS="qwen3_32b" METHODS="rrf,random" STATES="on" ...   # grid subsets
 set -euo pipefail
 
@@ -25,6 +27,12 @@ METHODS="${METHODS:-all}"        # passed INTO each job (csv or "all"), not fann
 STATES="${STATES:-on off}"
 SCAVENGER="${SCAVENGER:-0}"
 CLIP_ONLY="${CLIP_ONLY:-0}"
+# TRON_SPREAD=1: instead of queueing all four small-ON langpar jobs in the
+# scavenger scrum, use the tron partition's independent per-user QoS lanes —
+# high allows ONE 4-GPU job per user (24h wall; the requeue trap rolls it
+# over), medium ONE 2-GPU job. qwen3_14b gets the 4-GPU lane (slowest small
+# model), qwen3_8b the 2-GPU lane, and the two Ministrals stay on scavenger.
+TRON_SPREAD="${TRON_SPREAD:-0}"
 # NGPU: GPUs per language-parallel job. 5 = one GPU per WMT24++ language.
 # Verified against show_nodes: scavenger has many nodes with >=5 free A6000s
 # (tron00-05 6-8/node, cml30 8, vulcan29-32/45 8, cbcb27 7); on clip ONLY
@@ -37,6 +45,11 @@ NGPU="${NGPU:-5}"
 # preemption cost is <= 1 sentence per GPU stream.
 SCAV_LANGPAR=(--partition=scavenger --account=scavenger --qos=scavenger --gres=gpu:rtxa6000:"$NGPU")
 CLIP_LANGPAR=(--partition=clip --account=clip --qos=huge-long --gres=gpu:rtxa6000:"$NGPU")
+# tron lanes (TRON_SPREAD=1): CLI flags override the langpar script's #SBATCH
+# defaults; cpus/mem/time are shrunk to fit each QoS cap (high 16/128G/1d,
+# medium 8/64G).
+TRON_HIGH_LANGPAR=(--partition=tron --account=nexus --qos=high --gres=gpu:rtxa6000:4 --cpus-per-task=16 --mem=128G --time=1-00:00:00)
+TRON_MED_LANGPAR=(--partition=tron --account=nexus --qos=medium --gres=gpu:rtxa6000:2 --cpus-per-task=8 --mem=64G --time=1-00:00:00)
 # medium QoS (8 CPU / 2 GPU / 64GB / 2d) — generate.sbatch asks 8 CPU + 64G,
 # which exceeds default QoS caps (4 CPU / 32GB).
 CLIP_1GPU_SHORT=(--partition=clip --account=clip --qos=medium --gres=gpu:rtxa6000:1)
@@ -69,8 +82,16 @@ for m in $MODELS; do
     if [ "$st" = "on" ] && ! is_big "$m"; then
       # small/medium ON: one language-parallel multi-GPU job per model.
       # Default scavenger (see routing note above); CLIP_ONLY forces clip,
-      # where only clip13 can host NGPU=5 — expect queueing.
-      if [ "$CLIP_ONLY" = "1" ]; then FL=("${CLIP_LANGPAR[@]}"); else FL=("${SCAV_LANGPAR[@]}"); fi
+      # where only clip13 can host NGPU=5 — expect queueing. TRON_SPREAD
+      # peels the two Qwens off into tron's high/medium lanes.
+      if [ "$CLIP_ONLY" = "1" ]; then FL=("${CLIP_LANGPAR[@]}")
+      elif [ "$TRON_SPREAD" = "1" ]; then
+        case "$m" in
+          qwen3_14b) FL=("${TRON_HIGH_LANGPAR[@]}") ;;
+          qwen3_8b)  FL=("${TRON_MED_LANGPAR[@]}") ;;
+          *)         FL=("${SCAV_LANGPAR[@]}") ;;
+        esac
+      else FL=("${SCAV_LANGPAR[@]}"); fi
       jid=$(sbatch --parsable "${FL[@]}" "${DEP_FLAG[@]}" \
             --job-name="rt-${m}-on-${DATASET}" \
             slurm/generate_langpar.sbatch "$m" "$METHODS" "$DATASET")
