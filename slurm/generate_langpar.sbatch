@@ -93,8 +93,14 @@ if [ "$DATASET" = "wmt24pp" ]; then
 else
   export RTRACE_EMB_ROOT="${RTRACE_FLORES_EMB_ROOT:-$OUT_BASE/flores_embeddings}"
 fi
+# Per-model Mistral sampling (see generate.sbatch): ministral_14b's card
+# says temperature=1.0, the rest of the family 0.7; top_p 0.95 throughout.
 if [ "$FAMILY" = "Mistral" ]; then
-  export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
+  if [ "$MODEL_KEY" = "ministral_14b" ]; then
+    export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-1.0}"
+  else
+    export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
+  fi
   export RTRACE_TOP_P="${RTRACE_TOP_P:-0.95}"
 fi
 # Caches PINNED to OUT_BASE — ambient HF_HOME (nexus-scratch quota) must not

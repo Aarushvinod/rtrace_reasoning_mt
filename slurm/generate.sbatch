@@ -94,11 +94,16 @@ if [ "$DATASET" = "wmt24pp" ]; then
 else
   export RTRACE_EMB_ROOT="${RTRACE_FLORES_EMB_ROOT:-$OUT_BASE/flores_embeddings}"
 fi
-# Mistral's cards recommend one sampling config (0.7/0.95) with no
-# thinking/non-thinking split — apply it in BOTH states. Qwen keeps its
-# state-conditional card defaults from reasoning_main.
+# Mistral cards recommend one sampling config per model with no thinking/
+# non-thinking split — apply in BOTH states. ministral_14b's card says
+# temperature=1.0; the rest of the family uses 0.7. top_p is 0.95 across
+# the family. Qwen keeps its state-conditional defaults from reasoning_main.
 if [ "$FAMILY" = "Mistral" ]; then
-  export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
+  if [ "$MODEL_KEY" = "ministral_14b" ]; then
+    export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-1.0}"
+  else
+    export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
+  fi
   export RTRACE_TOP_P="${RTRACE_TOP_P:-0.95}"
 fi
 # Caches PINNED to OUT_BASE (clip-scratch), deliberately ignoring any
