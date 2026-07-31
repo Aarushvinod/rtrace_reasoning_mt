@@ -47,6 +47,10 @@ SCAV_1GPU=(--partition=scavenger --account=scavenger --qos=scavenger --gres=gpu:
 # Candidates: cml31 (h100-nvl 94GB), cml33 (4x h100-sxm 80GB), cml35/36 +
 # vulcan46 (8x h200-sxm 141GB each).
 SCAV_HOPPER=(--partition=scavenger --account=scavenger --qos=scavenger --constraint=Hopper --gres=gpu:1)
+# qwen3_32b reasoning-on must NOT land on an 80GB h100-sxm: 61GiB of weights
+# leave <20480 tokens of KV there. Pin it to the 141GB H200s by GRES type
+# (24 cards across cml35/36 + vulcan46).
+SCAV_H200=(--partition=scavenger --account=scavenger --qos=scavenger --gres=gpu:h200-sxm:1)
 
 is_big() { case "$1" in magistral_small|qwen3_32b) return 0 ;; *) return 1 ;; esac; }
 
@@ -74,20 +78,14 @@ for m in $MODELS; do
     else
       # big ON + every OFF: one single-allocation job per model
       if [ "$st" = "on" ]; then
-        if [ "$CLIP_ONLY" = "1" ]; then FL=("${CLIP_2GPU[@]}"); else FL=("${SCAV_HOPPER[@]}"); fi
+        if [ "$CLIP_ONLY" = "1" ]; then FL=("${CLIP_2GPU[@]}")
+        elif [ "$m" = "qwen3_32b" ]; then FL=("${SCAV_H200[@]}")
+        else FL=("${SCAV_HOPPER[@]}"); fi
       else
         if is_big "$m"; then
           if [ "$CLIP_ONLY" = "1" ]; then FL=("${CLIP_2GPU[@]}"); else FL=("${SCAV_HOPPER[@]}"); fi
         else
           if [ "$SCAVENGER" = "1" ]; then FL=("${SCAV_1GPU[@]}"); else FL=("${CLIP_1GPU_SHORT[@]}"); fi
-        fi
-      fi
-      # 32B on a single 80GB Hopper: cap context so the KV allocation fits.
-      if [ "$m" = "qwen3_32b" ] && [[ " ${FL[*]} " == *" --constraint=Hopper "* ]]; then
-        if [ "$st" = "on" ]; then
-          EXPORTS=",RTRACE_MAX_MODEL_LEN=32768,RTRACE_MAX_NEW_TOKENS=30000"
-        else
-          EXPORTS=",RTRACE_MAX_MODEL_LEN=8192"
         fi
       fi
       jid=$(sbatch --parsable "${FL[@]}" "${DEP_FLAG[@]}" \

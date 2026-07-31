@@ -94,7 +94,10 @@ if [ "$DATASET" = "wmt24pp" ]; then
 else
   export RTRACE_EMB_ROOT="${RTRACE_FLORES_EMB_ROOT:-$OUT_BASE/flores_embeddings}"
 fi
-if [ "$FAMILY" = "Mistral" ] && [ "$STATE" = "on" ]; then
+# Mistral's cards recommend one sampling config (0.7/0.95) with no
+# thinking/non-thinking split — apply it in BOTH states. Qwen keeps its
+# state-conditional card defaults from reasoning_main.
+if [ "$FAMILY" = "Mistral" ]; then
   export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
   export RTRACE_TOP_P="${RTRACE_TOP_P:-0.95}"
 fi
