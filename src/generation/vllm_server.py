@@ -143,6 +143,11 @@ class VLLMServerProcess:
         log_path = os.path.join(self.log_dir, f"{self.spec.model_key}_port{self.spec.port}.log")
 
         env = os.environ.copy()
+        # The compute nodes have no CUDA toolkit (no nvcc), and vLLM's default
+        # FlashInfer top-k/top-p sampler JIT-compiles a kernel at engine
+        # startup — which crashes every server with "Could not find nvcc".
+        # Force the PyTorch-native sampler; explicit ambient overrides win.
+        env.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
         if self.spec.env_overrides:
             env.update({k: str(v) for k, v in self.spec.env_overrides.items()})
 

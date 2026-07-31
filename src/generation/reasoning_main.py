@@ -205,7 +205,10 @@ VLLM_SERVER_HOST = "127.0.0.1"
 # and (b) several per-GPU server processes inside one language-parallel job
 # never race for the same port. SLURM scripts derive it from the job id.
 VLLM_PORT_BASE = int(os.environ.get("RTRACE_PORT_BASE", "8000"))
-VLLM_SERVER_START_TIMEOUT_S = 600
+# First boot on a fresh cache can legitimately take >20 min for the 24B/32B
+# models (weight download over NFS + safetensors load + torch.compile), so the
+# readiness timeout must comfortably exceed that — 600s killed healthy boots.
+VLLM_SERVER_START_TIMEOUT_S = int(os.environ.get("RTRACE_SERVER_START_TIMEOUT_S", "2400"))
 VLLM_SERVER_POLL_INTERVAL_S = 1.0
 VLLM_SERVER_LOG_DIR = "vllm_server_logs"
 
