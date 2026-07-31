@@ -15,7 +15,6 @@ Outputs: JSONL files with per-sentence `translation` and `reasoning_trace`
 
 import json
 import os
-import re
 import signal
 import subprocess
 import time
@@ -262,46 +261,6 @@ def load_system_prompt(repo_id: str, filename: str) -> dict[str, Any]:
     }
 
 
-# vLLM's context-overflow 400 reports both the window size and the measured
-# prompt length — parse them so the retry can size max_tokens to what fits.
-_CTX_OVERFLOW_RE = re.compile(
-    r"maximum context length is (\d+) tokens.*?at least (\d+) input tokens",
-    re.DOTALL,
-)
-
-
-def _create_chat_completion_with_context_clamp(client, request_kwargs: Dict[str, Any]):
-    """
-    Purpose: Call chat.completions.create, and when the server rejects the
-             request because prompt + max_tokens exceeds the model's context
-             window (long k=10 prompts under capped max-model-len setups),
-             retry with max_tokens clamped to the remaining window. The
-             prompt/demonstrations are never truncated — only the output
-             budget shrinks, and only for the offending request.
-    Inputs:  OpenAI client and fully-built create() kwargs (max_tokens set).
-    Outputs: the create() response (or stream iterator).
-    """
-    from openai import BadRequestError
-
-    for _ in range(3):
-        try:
-            return client.chat.completions.create(**request_kwargs)
-        except BadRequestError as e:
-            m = _CTX_OVERFLOW_RE.search(str(e))
-            if not m:
-                raise
-            max_ctx, input_tokens = int(m.group(1)), int(m.group(2))
-            clamped = max_ctx - input_tokens - 64
-            if clamped <= 0 or clamped >= int(request_kwargs["max_tokens"]):
-                raise
-            print(
-                f"[context-clamp] prompt={input_tokens} tok exceeds window with "
-                f"max_tokens={request_kwargs['max_tokens']}; retrying with max_tokens={clamped} (ctx={max_ctx})"
-            )
-            request_kwargs = {**request_kwargs, "max_tokens": clamped}
-    return client.chat.completions.create(**request_kwargs)
-
-
 def _attempt_translation(
     client,
     *,
@@ -324,17 +283,14 @@ def _attempt_translation(
     Outputs: tuple of (translation, reasoning_val) — both are strings,
              translation may be "" if the model produced no usable output.
     """
-    resp = _create_chat_completion_with_context_clamp(
-        client,
-        dict(
-            model=served_model_id,
-            messages=messages,
-            temperature=float(temperature),
-            top_p=float(top_p),
-            max_tokens=int(max_new_tokens),
-            stop=stop_sequences,
-            extra_body=extra_body,
-        ),
+    resp = client.chat.completions.create(
+        model=served_model_id,
+        messages=messages,
+        temperature=float(temperature),
+        top_p=float(top_p),
+        max_tokens=int(max_new_tokens),
+        stop=stop_sequences,
+        extra_body=extra_body,
     )
     msg = resp.choices[0].message
     reasoning_val = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None) or ""
@@ -557,18 +513,15 @@ def stream_reasoning_and_content_for_messages(
     Inputs: OpenAI client, served model id, chat messages, decoding params, and extra body.
     Outputs: tuple of (reasoning_text, content_text).
     """
-    stream = _create_chat_completion_with_context_clamp(
-        client,
-        dict(
-            model=served_model_id,
-            messages=messages,
-            stream=True,
-            temperature=float(temperature),
-            top_p=float(top_p),
-            max_tokens=int(max_new_tokens),
-            stop=stop_sequences,
-            extra_body=extra_body,
-        ),
+    stream = client.chat.completions.create(
+        model=served_model_id,
+        messages=messages,
+        stream=True,
+        temperature=float(temperature),
+        top_p=float(top_p),
+        max_tokens=int(max_new_tokens),
+        stop=stop_sequences,
+        extra_body=extra_body,
     )
 
     reasoning_parts: List[str] = []
