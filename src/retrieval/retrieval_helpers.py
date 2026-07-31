@@ -714,7 +714,10 @@ def _load_or_create_random_pool_selections(
 
         return loaded
 
-    rng = np.random.default_rng()
+    # Seeded so a regenerated file is byte-identical to the committed artifact
+    # (data/random_pool_selections/) — the random baseline must be one FIXED
+    # selection across every model/state for paired comparisons.
+    rng = np.random.default_rng(12345)
     selections: List[List[int]] = []
 
     for _ in range(n_devtest):

@@ -130,7 +130,14 @@ K_MAX = max(K_LIST) if K_LIST else 0
 M_PER_MODEL = K_MAX
 
 EMB_METHODS = ["cohere", "sonar", "labse", "MiniLM", "e5"]
+# The SLURM scripts pass short method names (random, sentinel) but both the
+# dispatcher (ensemble_topk_dispatch) and the eval pipeline's filename
+# patterns (k{K}_random_pool_template11.jsonl, k{K}_pool_sentinel_src_rerank_
+# template11.jsonl) speak the internal vocabulary — normalize here so the
+# dispatch succeeds AND output filenames match what eval globs for.
+_METHOD_ALIASES = {"random": "random_pool", "sentinel": "pool_sentinel_src_rerank"}
 ENSEMBLE_METHOD = os.environ.get("RTRACE_METHOD", "edit_dist")
+ENSEMBLE_METHOD = _METHOD_ALIASES.get(ENSEMBLE_METHOD, ENSEMBLE_METHOD)
 RRF_K0 = 60
 
 FRAGMENTSHOT_MAX_FRAGMENT_SIZE = 5
@@ -215,10 +222,16 @@ VLLM_SERVER_LOG_DIR = "vllm_server_logs"
 LOG_REASONING_TRACES = _REASONING_ON
 ENABLE_REASONING = _REASONING_ON
 
+# Fixed random-selection artifact, one file PER DATASET (rows are indices
+# into that dataset's eng-side pool; pool sizes differ, so sharing a file
+# across datasets would silently misindex or fail validation). The wmt24pp
+# file is committed to the repo (seed 12345, scripts/make_random_pool_
+# selections.py) so every concurrent job LOADS the same fixed selection
+# instead of racing to create one.
 RANDOM_SELECTION_FILEPATHS: List[str] = [
     os.environ.get(
         "RTRACE_RANDOM_POOL",
-        "drive/MyDrive/random_pool_selections/eng_random_pool.json",
+        f"data/random_pool_selections/{DATASET}_eng_random_pool.json",
     ),
 ]
 
