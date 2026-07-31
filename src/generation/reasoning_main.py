@@ -152,22 +152,28 @@ if _REASONING_STATE not in ("on", "off"):
     raise ValueError(f"RTRACE_REASONING must be 'on' or 'off', got {_REASONING_STATE!r}")
 _REASONING_ON = _REASONING_STATE == "on"
 
-# ── Decoding budgets are the study's declared config (proven in prior runs):
-#    reasoning ON generates up to 2048*6 = 12288 new tokens inside a 20480
-#    window (>= 8192 tokens of prompt headroom at k=10 — no per-request
-#    clamping, budgets identical for every sentence); OFF is 256 new tokens
-#    in an 8192 window. Sampling follows each family's official card: Qwen3
-#    thinking 0.6/0.95, non-thinking 0.7/0.8 (defaults below); Mistral uses
-#    0.7/0.95 in BOTH states via the sbatch env override (its cards make no
-#    thinking/non-thinking distinction). Traces exceeding the ON budget are
-#    truncated -> empty translation -> caught by the retry loop below.
+# ── Decoding budgets are sized for WMT24++'s paragraph-length segments
+#    (far longer than FLORES: the worst observed k=10 prompt measured 7,937
+#    input tokens, and the old OFF budget of 256 silently truncated long
+#    Malayalam translations). Both states reserve the SAME 12,288 tokens of
+#    input headroom — prompts are identical across states, so a prompt must
+#    fit (or fail loudly) in both, never one-sided:
+#      ON : 16384 new tokens in a 28672 window (trace + translation)
+#      OFF:  2048 new tokens in a 14336 window (longest segment ~800 EN
+#            tokens x ~2 target-token expansion fits comfortably)
+#    No per-request clamping — an overlong prompt fails the job loudly.
+#    Sampling follows each family's official card: Qwen3 thinking 0.6/0.95,
+#    non-thinking 0.7/0.8 (defaults below); Mistral via sbatch overrides
+#    (0.7/0.95 family-wide, ministral_14b at temperature 1.0), both states.
+#    Traces exceeding the ON budget are truncated -> empty translation ->
+#    caught by the retry loop below.
 REQUEST_BATCH_SIZE = 32
-MAX_NEW_TOKENS = int(os.environ.get("RTRACE_MAX_NEW_TOKENS", "12288" if _REASONING_ON else "256"))
+MAX_NEW_TOKENS = int(os.environ.get("RTRACE_MAX_NEW_TOKENS", "16384" if _REASONING_ON else "2048"))
 TEMPERATURE = float(os.environ.get("RTRACE_TEMPERATURE", "0.6" if _REASONING_ON else "0.7"))
 TOP_P = float(os.environ.get("RTRACE_TOP_P", "0.95" if _REASONING_ON else "0.8"))
 TOP_K = 20
 MIN_P = 0
-MAX_MODEL_LEN = int(os.environ.get("RTRACE_MAX_MODEL_LEN", "20480" if _REASONING_ON else "8192"))
+MAX_MODEL_LEN = int(os.environ.get("RTRACE_MAX_MODEL_LEN", "28672" if _REASONING_ON else "14336"))
 STOP_SEQUENCES = []
 
 PROMPT_HEADER = (
