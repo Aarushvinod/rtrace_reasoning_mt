@@ -36,9 +36,15 @@ MODEL_KEY="$1"          # qwen3_8b|qwen3_14b|ministral_8b|ministral_14b
 METHODS_ARG="$2"        # "all" or csv subset of rrf,random,sentinel,edit_dist
 DATASET="${3:-flores}"  # flores|wmt24pp
 
+# Big models don't fit one 48GB A6000 — but they DO fit one H200/H100, so
+# language-parallel runs are legal there. RTRACE_ALLOW_BIG_LANGPAR=1 lifts
+# the guard; the submitter is responsible for requesting big-enough GPUs
+# (e.g. --gres=gpu:h200-sxm:5).
 case "$MODEL_KEY" in
   magistral_small|qwen3_32b)
-    echo "refusing: $MODEL_KEY does not fit one 48GB GPU; use generate.sbatch on a Hopper"; exit 2 ;;
+    if [ "${RTRACE_ALLOW_BIG_LANGPAR:-0}" != "1" ]; then
+      echo "refusing: $MODEL_KEY does not fit one 48GB GPU; use generate.sbatch on a Hopper, or set RTRACE_ALLOW_BIG_LANGPAR=1 with Hopper-class --gres"; exit 2
+    fi ;;
 esac
 
 if [ "$METHODS_ARG" = "all" ]; then
