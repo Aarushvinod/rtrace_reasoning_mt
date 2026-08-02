@@ -106,6 +106,15 @@ if [ "$FAMILY" = "Mistral" ]; then
   fi
   export RTRACE_TOP_P="${RTRACE_TOP_P:-0.95}"
 fi
+# Mistral REASONING gets a larger window (28672 + 12288 headroom = 40960)
+# so marginal traces finish instead of dying at the ceiling, and a 5-retry
+# cap since each dud costs a full-budget generation. At this window only
+# ministral_8b fits a 48GB card; 14b/magistral need Hopper-class GPUs.
+if [ "$FAMILY" = "Mistral" ] && [ "$STATE" = "on" ]; then
+  export RTRACE_MAX_NEW_TOKENS="${RTRACE_MAX_NEW_TOKENS:-28672}"
+  export RTRACE_MAX_MODEL_LEN="${RTRACE_MAX_MODEL_LEN:-40960}"
+  export RTRACE_MAX_RETRIES="${RTRACE_MAX_RETRIES:-5}"
+fi
 # Caches PINNED to OUT_BASE (clip-scratch), deliberately ignoring any
 # login-shell HF_HOME — ambient values often point at the small nexus-scratch
 # quota, which cannot hold ~200GB of model weights (this exact failure mode

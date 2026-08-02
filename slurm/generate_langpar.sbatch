@@ -101,6 +101,12 @@ else
 fi
 # Per-model Mistral sampling (see generate.sbatch): ministral_14b's card
 # says temperature=1.0, the rest of the family 0.7; top_p 0.95 throughout.
+# Mistral reasoning also gets a larger window (28672 new tokens + the same
+# 12288-token prompt headroom = 40960) so marginal traces can finish
+# instead of dying at the ceiling, and retries capped at 5 since a dud
+# costs a full-budget generation. NOTE: at this window ministral_14b and
+# magistral_small need Hopper-class GPUs; only ministral_8b still fits a
+# 48GB A6000.
 if [ "$FAMILY" = "Mistral" ]; then
   if [ "$MODEL_KEY" = "ministral_14b" ]; then
     export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-1.0}"
@@ -108,6 +114,9 @@ if [ "$FAMILY" = "Mistral" ]; then
     export RTRACE_TEMPERATURE="${RTRACE_TEMPERATURE:-0.7}"
   fi
   export RTRACE_TOP_P="${RTRACE_TOP_P:-0.95}"
+  export RTRACE_MAX_NEW_TOKENS="${RTRACE_MAX_NEW_TOKENS:-28672}"
+  export RTRACE_MAX_MODEL_LEN="${RTRACE_MAX_MODEL_LEN:-40960}"
+  export RTRACE_MAX_RETRIES="${RTRACE_MAX_RETRIES:-5}"
 fi
 # Caches PINNED to OUT_BASE — ambient HF_HOME (nexus-scratch quota) must not
 # leak into jobs; ~200GB of weights live here. See generate.sbatch.

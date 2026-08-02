@@ -206,9 +206,11 @@ SKIP_EXISTING_TRANSLATIONS: bool = True
 # Number of additional attempts to make when the model returns an empty
 # translation.  The initial attempt does not count as a retry, so a value
 # of 3 means up to 4 total calls per sentence.  Set to 0 to disable
-# retries entirely.
+# retries entirely.  Env-overridable because a failed attempt costs a
+# FULL max_new_tokens generation — the Mistral reasoning models ramble to
+# the ceiling on long WMT24++ segments, so their jobs cap this at 5.
 # -----------------------------------------------------------------------
-MAX_TRANSLATION_RETRIES: int = 7
+MAX_TRANSLATION_RETRIES: int = int(os.environ.get("RTRACE_MAX_RETRIES", "7"))
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 TORCH_DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
