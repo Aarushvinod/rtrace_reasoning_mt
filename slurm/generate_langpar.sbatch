@@ -36,14 +36,14 @@ MODEL_KEY="$1"          # qwen3_8b|qwen3_14b|ministral_8b|ministral_14b
 METHODS_ARG="$2"        # "all" or csv subset of rrf,random,sentinel,edit_dist
 DATASET="${3:-flores}"  # flores|wmt24pp
 
-# Big models don't fit one 48GB A6000 — but they DO fit one H200/H100, so
-# language-parallel runs are legal there. RTRACE_ALLOW_BIG_LANGPAR=1 lifts
-# the guard; the submitter is responsible for requesting big-enough GPUs
-# (e.g. --gres=gpu:h200-sxm:5).
+# Big models don't fit one 48GB A6000 — but they DO fit one H200/H100, or a
+# tensor-parallel GROUP of smaller cards (RTRACE_GPUS_PER_WORKER >= 2).
+# RTRACE_ALLOW_BIG_LANGPAR=1 lifts the guard for single-GPU Hopper workers;
+# multi-GPU workers lift it implicitly.
 case "$MODEL_KEY" in
   magistral_small|qwen3_32b)
-    if [ "${RTRACE_ALLOW_BIG_LANGPAR:-0}" != "1" ]; then
-      echo "refusing: $MODEL_KEY does not fit one 48GB GPU; use generate.sbatch on a Hopper, or set RTRACE_ALLOW_BIG_LANGPAR=1 with Hopper-class --gres"; exit 2
+    if [ "${RTRACE_ALLOW_BIG_LANGPAR:-0}" != "1" ] && [ "${RTRACE_GPUS_PER_WORKER:-1}" -lt 2 ]; then
+      echo "refusing: $MODEL_KEY does not fit one 48GB GPU; use Hopper-class --gres with RTRACE_ALLOW_BIG_LANGPAR=1, or set RTRACE_GPUS_PER_WORKER>=2"; exit 2
     fi ;;
 esac
 
@@ -136,14 +136,34 @@ IFS=',' read -r -a LANGS <<< "$LANGS_CSV"
 
 IFS=',' read -r -a GPUS <<< "${CUDA_VISIBLE_DEVICES:-0}"
 NGPU="${#GPUS[@]}"
-echo "gpus=[${CUDA_VISIBLE_DEVICES:-0}] ngpu=$NGPU langs=${LANGS_CSV}"
 
-# Round-robin languages onto GPUs: GPU i gets langs i, i+N, i+2N, ...
+# RTRACE_GPUS_PER_WORKER=k shards each worker's model copy across k GPUs
+# (vLLM tensor-parallel; reasoning_main auto-sets TP from the visible GPU
+# count) — lets models too big for one card still language-parallelize,
+# e.g. ministral_14b as two TP=2 copies on a 4x A6000 node at the 40960
+# Mistral window. NGPU should be a multiple of k; leftovers idle.
+GPW="${RTRACE_GPUS_PER_WORKER:-1}"
+NWORKER=$((NGPU / GPW))
+if [ "$NWORKER" -lt 1 ]; then
+  echo "FATAL: $NGPU visible GPU(s) < RTRACE_GPUS_PER_WORKER=$GPW"; exit 2
+fi
+[ $((NGPU % GPW)) -ne 0 ] && echo "warning: $((NGPU % GPW)) GPU(s) will idle (NGPU=$NGPU not a multiple of GPW=$GPW)"
+declare -a GPUGRP
+for wi in $(seq 0 $((NWORKER - 1))); do
+  grp=""
+  for k in $(seq 0 $((GPW - 1))); do
+    grp="${grp:+${grp},}${GPUS[$((wi * GPW + k))]}"
+  done
+  GPUGRP[$wi]="$grp"
+done
+echo "gpus=[${CUDA_VISIBLE_DEVICES:-0}] ngpu=$NGPU gpus_per_worker=$GPW workers=$NWORKER langs=${LANGS_CSV}"
+
+# Round-robin languages onto workers: worker i gets langs i, i+N, i+2N, ...
 declare -a SHARD
-for gi in $(seq 0 $((NGPU - 1))); do SHARD[$gi]=""; done
+for wi in $(seq 0 $((NWORKER - 1))); do SHARD[$wi]=""; done
 for li in "${!LANGS[@]}"; do
-  gi=$((li % NGPU))
-  SHARD[$gi]="${SHARD[$gi]:+${SHARD[$gi]},}${LANGS[$li]}"
+  wi=$((li % NWORKER))
+  SHARD[$wi]="${SHARD[$wi]:+${SHARD[$wi]},}${LANGS[$li]}"
 done
 
 # Pre-download the weights ONCE so N workers don't race the HF download.
@@ -175,11 +195,11 @@ worker() {
 }
 
 PIDS=()
-for gi in $(seq 0 $((NGPU - 1))); do
-  [ -z "${SHARD[$gi]}" ] && continue
-  WLOG="slurm-${SLURM_JOB_NAME}-${SLURM_JOB_ID}-gpu${gi}.out"
-  echo "gpu ${GPUS[$gi]} -> langs=${SHARD[$gi]} methods=[$METHODS_LIST]  (log: $WLOG)"
-  worker "$gi" "${GPUS[$gi]}" "${SHARD[$gi]}" >> "$WLOG" 2>&1 &
+for wi in $(seq 0 $((NWORKER - 1))); do
+  [ -z "${SHARD[$wi]}" ] && continue
+  WLOG="slurm-${SLURM_JOB_NAME}-${SLURM_JOB_ID}-gpu${wi}.out"
+  echo "gpu ${GPUGRP[$wi]} -> langs=${SHARD[$wi]} methods=[$METHODS_LIST]  (log: $WLOG)"
+  worker "$wi" "${GPUGRP[$wi]}" "${SHARD[$wi]}" >> "$WLOG" 2>&1 &
   PIDS+=($!)
 done
 
