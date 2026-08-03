@@ -143,6 +143,11 @@ NGPU="${#GPUS[@]}"
 # e.g. ministral_14b as two TP=2 copies on a 4x A6000 node at the 40960
 # Mistral window. NGPU should be a multiple of k; leftovers idle.
 GPW="${RTRACE_GPUS_PER_WORKER:-1}"
+# TP groups on the PCIe A6000/A5000 nodes can DEADLOCK in NCCL peer-to-peer
+# setup during engine init (observed: clip05 TP=2 hung 38min at pynccl until
+# the boot timeout killed it). Stage TP traffic through host memory instead;
+# harmless for single-GPU workers, override with NCCL_P2P_DISABLE=0.
+export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
 NWORKER=$((NGPU / GPW))
 if [ "$NWORKER" -lt 1 ]; then
   echo "FATAL: $NGPU visible GPU(s) < RTRACE_GPUS_PER_WORKER=$GPW"; exit 2

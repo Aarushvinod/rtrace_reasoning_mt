@@ -125,6 +125,11 @@ export HF_HOME="${RTRACE_HF_HOME:-$OUT_BASE/hf_cache}"
 export XDG_CACHE_HOME="${RTRACE_XDG_CACHE:-$OUT_BASE/xdg_cache}"
 export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
 
+# Multi-GPU (tensor-parallel) jobs on PCIe A6000/A5000 nodes can deadlock in
+# NCCL peer-to-peer setup during engine init — stage TP traffic through host
+# memory (no-op for single-GPU jobs; override with NCCL_P2P_DISABLE=0).
+export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
+
 # AUTO-RESUME: SIGUSR1 arrives 5 min before the wall; the trap requeues this
 # job. The restarted attempt re-runs the method loop from the top — completed
 # methods fast-forward via skip-existing in seconds, and the interrupted
