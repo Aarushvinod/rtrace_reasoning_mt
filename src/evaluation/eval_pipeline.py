@@ -51,6 +51,22 @@ _patch_fasttext_for_numpy2()
 # ─────────────────────────────────────────────────────────────────────────────
 LOAD_FROM_CSV = True
 
+# ── Dataset arm: flores (notebook-era Drive defaults) or wmt24pp (cluster
+#    runs/ roots). RTRACE_DATASET selects generation roots, target languages,
+#    k grid, references and the output dir; RTRACE_EVAL_MODELS (csv of model
+#    keys) restricts scoring to a subset — e.g. the finished Qwen runs while
+#    the Mistral grid is still generating.
+DATASET = os.environ.get("RTRACE_DATASET", "flores").lower()
+if DATASET not in ("flores", "wmt24pp"):
+    raise ValueError(f"RTRACE_DATASET must be 'flores' or 'wmt24pp', got {DATASET!r}")
+OUT_BASE = os.environ.get("RTRACE_OUT_BASE", "runs")
+if DATASET == "wmt24pp":
+    _MISTRAL_ROOT = f"{OUT_BASE}/WMT24PP_Mistral_All_Reasoning_"
+    _QWEN_ROOT = f"{OUT_BASE}/WMT24PP_Qwen_All_Reasoning_"
+else:
+    _MISTRAL_ROOT = "drive/MyDrive/Mistral_All_Reasoning_"
+    _QWEN_ROOT = "drive/MyDrive/Qwen_All_Reasoning_"
+
 MODELS: Dict[str, str] = {
     "ministral_8b": "Ministral 8B",
     "ministral_14b": "Ministral 14B",
@@ -66,6 +82,19 @@ MODEL_FAMILIES: Dict[str, List[str]] = {
     "Mistral": ["ministral_8b", "ministral_14b", "magistral_small"],
     "Qwen":    ["qwen3_8b",     "qwen3_14b",     "qwen3_32b"],
 }
+
+# Partial-grid evaluation: RTRACE_EVAL_MODELS=qwen3_8b,qwen3_14b,qwen3_32b
+# scores only those models; family plots collapse to the families present.
+_EVAL_MODELS_ENV = os.environ.get("RTRACE_EVAL_MODELS", "").strip()
+if _EVAL_MODELS_ENV:
+    _keep = {m.strip() for m in _EVAL_MODELS_ENV.split(",") if m.strip()}
+    _unknown = _keep - set(MODELS)
+    if _unknown:
+        raise ValueError(f"RTRACE_EVAL_MODELS contains unknown keys: {sorted(_unknown)}")
+    MODELS = {k: v for k, v in MODELS.items() if k in _keep}
+    MODEL_ORDER = list(MODELS.keys())
+    MODEL_FAMILIES = {f: [m for m in ms if m in MODELS] for f, ms in MODEL_FAMILIES.items()}
+    MODEL_FAMILIES = {f: ms for f, ms in MODEL_FAMILIES.items() if ms}
 
 MODEL_SIZE_THRESHOLD: float = 14.0
 
@@ -86,37 +115,25 @@ GENERATION_RUNS_REASONING_ON: List[Dict[str, Any]] = [
     {
         "key": "reasoning_on",
         "label": "RRF Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On",
-            "drive/MyDrive/Qwen_All_Reasoning_On",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "On", _QWEN_ROOT + "On"),
         "filename_pattern": "k{K}_rrf_template11.jsonl",
     },
     {
         "key": "reasoning_on_random",
         "label": "Random Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_random",
-            "drive/MyDrive/Qwen_All_Reasoning_On_random",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "On_random", _QWEN_ROOT + "On_random"),
         "filename_pattern": "k{K}_random_pool_template11.jsonl",
     },
     {
         "key": "reasoning_on_sentinel",
         "label": "Sentinel Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_On_sentinel",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "On_sentinel", _QWEN_ROOT + "On_sentinel"),
         "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
     },
     {
         "key": "reasoning_on_edit_dist",
         "label": "Edit Distance Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_On_edit_dist",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "On_edit_dist", _QWEN_ROOT + "On_edit_dist"),
         "filename_pattern": "k{K}_edit_dist_template11.jsonl",
     },
 ]
@@ -125,52 +142,46 @@ GENERATION_RUNS_REASONING_OFF: List[Dict[str, Any]] = [
     {
         "key": "reasoning_off",
         "label": "RRF Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off",
-            "drive/MyDrive/Qwen_All_Reasoning_Off",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "Off", _QWEN_ROOT + "Off"),
         "filename_pattern": "k{K}_rrf_template11.jsonl",
     },
     {
         "key": "reasoning_off_random",
         "label": "Random Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_random",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_random",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "Off_random", _QWEN_ROOT + "Off_random"),
         "filename_pattern": "k{K}_random_pool_template11.jsonl",
     },
     {
         "key": "reasoning_off_sentinel",
         "label": "Sentinel Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_sentinel",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "Off_sentinel", _QWEN_ROOT + "Off_sentinel"),
         "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
     },
     {
         "key": "reasoning_off_edit_dist",
         "label": "Edit Distance Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_edit_dist",
-        ),
+        "root_dir": _model_root_dir_map(_MISTRAL_ROOT + "Off_edit_dist", _QWEN_ROOT + "Off_edit_dist"),
         "filename_pattern": "k{K}_edit_dist_template11.jsonl",
     },
 ]
 
 SRC_LANGS: List[str] = ["eng_Latn"]
-TGT_LANGS: List[str] = [
-    "wol_Latn",
-    "swh_Latn",
-    "lus_Latn",
-    "mni_Beng",
-    "tel_Telu",
-    "tam_Taml",
-    "uzn_Latn",
-]
-K_LIST: List[int] = [0, 1, 3, 5, 7, 10]
+if DATASET == "wmt24pp":
+    TGT_LANGS: List[str] = ["cat_Latn", "zul_Latn", "mal_Mlym", "slk_Latn", "isl_Latn"]
+    # The WMT24++ generation grid ran K_LIST=1,3,5,7,10 — no k=0 files exist,
+    # so the zero-shot column is omitted rather than filled with NaNs.
+    K_LIST: List[int] = [1, 3, 5, 7, 10]
+else:
+    TGT_LANGS = [
+        "wol_Latn",
+        "swh_Latn",
+        "lus_Latn",
+        "mni_Beng",
+        "tel_Telu",
+        "tam_Taml",
+        "uzn_Latn",
+    ]
+    K_LIST = [0, 1, 3, 5, 7, 10]
 
 # Toggle whether the k=0 baseline shows up in every plot/table.
 # False (default): k=0 is excluded from line plots, delta plots, superplots,
@@ -184,11 +195,17 @@ K_LIST_PLOT: List[int] = K_LIST if INCLUDE_K0_IN_PLOTS else [k for k in K_LIST i
 
 EVAL_FIRST_M: Optional[int] = 100
 
-PLOTS_DIR = "drive/MyDrive/eval_plots_paper_initial"
+PLOTS_DIR = os.environ.get(
+    "RTRACE_EVAL_PLOTS_DIR",
+    f"{OUT_BASE}/WMT24PP_eval_plots" if DATASET == "wmt24pp" else "drive/MyDrive/eval_plots_paper_initial",
+)
 LANG_DISPLAY: Dict[str, str] = {
     "eng_Latn": "English", "wol_Latn": "Wolof", "swh_Latn": "Swahili",
     "lus_Latn": "Mizo", "mni_Beng": "Meitei", "tel_Telu": "Telugu",
     "tam_Taml": "Tamil", "uzn_Latn": "Uzbek",
+    # WMT24++ arm
+    "cat_Latn": "Catalan", "zul_Latn": "Zulu", "mal_Mlym": "Malayalam",
+    "slk_Latn": "Slovak", "isl_Latn": "Icelandic",
 }
 
 COMET_MODEL_NAME = "Unbabel/wmt22-comet-da"
@@ -316,6 +333,15 @@ def load_flores_devtest(sl, tl):
     ds = load_dataset("Muennighoff/flores200", sl, trust_remote_code=True)
     dt = load_dataset("Muennighoff/flores200", tl, trust_remote_code=True)
     return [e["sentence"] for e in ds["devtest"]], [e["sentence"] for e in dt["devtest"]]
+
+def load_reference_sentences(sl, tl):
+    """Dataset-arm dispatch: FLORES devtest, or the fixed 100-sentence
+    WMT24++ test split (identical to what generation translated — the
+    committed data/wmt24pp_split.json ordering)."""
+    if DATASET == "wmt24pp":
+        from src.data.wmt24pp import load_wmt24pp_sentences
+        return load_wmt24pp_sentences(sl)["devtest"], load_wmt24pp_sentences(tl)["devtest"]
+    return load_flores_devtest(sl, tl)
 
 def load_comet_and_identifier():
     mp = download_model(COMET_MODEL_NAME); cm = load_from_checkpoint(mp)
@@ -469,7 +495,7 @@ def evaluate_all(generation_runs, src_langs, tgt_langs, k_list, eval_first_m, co
     for sl in src_langs:
         for tl in tgt_langs:
             dr = direction_folder_name(sl,tl); dd = direction_display_from_folder(dr)
-            if (sl,tl) not in flores_cache: flores_cache[(sl,tl)] = load_flores_devtest(sl,tl)
+            if (sl,tl) not in flores_cache: flores_cache[(sl,tl)] = load_reference_sentences(sl,tl)
             sf,tf = flores_cache[(sl,tl)]
             ceil = _apply_limit(len(sf),eval_first_m); sc=sf[:ceil]; tc=tf[:ceil]
             for mk,md in MODELS.items():
