@@ -60,6 +60,54 @@ def _load_existing_jsonl_field(path: str, field: str, n: int) -> List[Optional[s
     return results
 
 
+def _count_jsonl_lines(path: str) -> int:
+    """
+    Purpose: Count the lines currently present in a JSONL file.
+    Inputs:  path — file to count.
+    Outputs: line count (0 if the file is missing or unreadable).
+    """
+    if not os.path.exists(path):
+        return 0
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+def _prepare_resume(
+    out_jsonl_path: str,
+    out_reasoning_jsonl_path: str,
+    n: int,
+) -> Tuple[bool, List[Optional[str]], List[Optional[str]]]:
+    """
+    Purpose: Build the resume state for a direction, recovering banked work
+             from both the published files and any .tmp left by an attempt
+             that was preempted mid-walk.
+    Inputs:  final translation/reasoning paths and expected sentence count n.
+    Outputs: (complete, translations, reasoning). complete is True only when
+             the PUBLISHED translation file already holds n non-empty entries,
+             so the caller can skip the direction without rewriting anything.
+             The lists merge published and .tmp values pairwise, preferring
+             the .tmp pair wherever its translation is non-empty (that is
+             newer regenerated work not yet published).
+    """
+    main_t = _load_existing_jsonl_field(out_jsonl_path, "translation", n)
+    main_r = _load_existing_jsonl_field(out_reasoning_jsonl_path, "reasoning", n)
+    complete = (
+        all(t for t in main_t)
+        and _count_jsonl_lines(out_jsonl_path) >= n
+        and _count_jsonl_lines(out_reasoning_jsonl_path) >= n
+    )
+    if complete:
+        return True, main_t, main_r
+    tmp_t = _load_existing_jsonl_field(out_jsonl_path + ".tmp", "translation", n)
+    tmp_r = _load_existing_jsonl_field(out_reasoning_jsonl_path + ".tmp", "reasoning", n)
+    merged_t = [tmp_t[i] if tmp_t[i] else main_t[i] for i in range(n)]
+    merged_r = [tmp_r[i] if tmp_t[i] else main_r[i] for i in range(n)]
+    return False, merged_t, merged_r
+
+
 @dataclass
 class VLLMServerSpec:
     """
@@ -384,6 +432,9 @@ def run_openai_for_direction(
              reasoning traces are always overwritten with the newly produced reasoning.
              When max_retries > 0, any attempt that produces an empty translation is retried up to
              max_retries additional times; the first non-empty result is kept immediately.
+             Outputs are rewritten via sibling .tmp files and published with an atomic os.replace
+             only after the full walk, so a mid-walk kill never loses previously banked sentences;
+             fully-complete directions are skipped without touching the published files.
     Inputs: OpenAI client, model id, data lists, indices, decoding params, output paths, prompt config,
             skip_existing_translations flag, max_retries count.
     Outputs: None.
@@ -394,8 +445,21 @@ def run_openai_for_direction(
     n_sentences = len(src_devtest)
 
     if skip_existing_translations:
-        existing_translations = _load_existing_jsonl_field(out_jsonl_path, "translation", n_sentences)
-        existing_reasoning = _load_existing_jsonl_field(out_reasoning_jsonl_path, "reasoning", n_sentences)
+        complete, existing_translations, existing_reasoning = _prepare_resume(
+            out_jsonl_path, out_reasoning_jsonl_path, n_sentences
+        )
+        if complete:
+            # Nothing to redo: leave the published files untouched (no
+            # truncate/rewrite window at all) and refresh their timestamps so
+            # scratch-purge age sweeps never see them as stale.
+            now = time.time()
+            for p in (out_jsonl_path, out_reasoning_jsonl_path):
+                try:
+                    os.utime(p, (now, now))
+                except OSError:
+                    pass
+            print(f"[skip-file] {out_jsonl_path} complete ({n_sentences}/{n_sentences}); left untouched.")
+            return
     else:
         existing_translations = [None] * n_sentences
         existing_reasoning = [None] * n_sentences
@@ -416,8 +480,15 @@ def run_openai_for_direction(
         prompts.append(prompt)
         templates_for_each.append(template)
 
-    with open(out_jsonl_path, "w", encoding="utf-8") as f_out, \
-         open(out_reasoning_jsonl_path, "w", encoding="utf-8") as f_r:
+    # All (re)writes go to sibling .tmp files; the previously published files
+    # stay intact on disk until every sentence is written, then an atomic
+    # os.replace publishes the new versions. A preemption/kill at any point
+    # therefore never loses banked sentences — at worst the in-flight one,
+    # and the partial .tmp is itself recovered by _prepare_resume next time.
+    tmp_jsonl_path = out_jsonl_path + ".tmp"
+    tmp_reasoning_jsonl_path = out_reasoning_jsonl_path + ".tmp"
+    with open(tmp_jsonl_path, "w", encoding="utf-8") as f_out, \
+         open(tmp_reasoning_jsonl_path, "w", encoding="utf-8") as f_r:
 
         for start in range(0, len(prompts), int(request_batch_size)):
             batch_prompts = prompts[start : start + int(request_batch_size)]
@@ -432,8 +503,8 @@ def run_openai_for_direction(
                         print(f"[skip] sentence {global_idx} already translated.")
                         f_out.write(json.dumps({"translation": stored}, ensure_ascii=False) + "\n")
                         f_r.write(json.dumps({"reasoning": existing_reasoning[global_idx]}, ensure_ascii=False) + "\n")
-                        # Flush per line so a SLURM preemption (SIGKILL) never
-                        # loses previously-completed sentences to OS buffering.
+                        # Flush per line so a killed attempt's .tmp always
+                        # carries everything walked so far.
                         f_out.flush()
                         f_r.flush()
                         continue
@@ -489,12 +560,14 @@ def run_openai_for_direction(
                 else:
                     f_r.write(json.dumps({"reasoning": None}, ensure_ascii=False) + "\n")
 
-                # Flush after every completed sentence: on scavenger preemption
-                # the resume pass (skip_existing_translations=True) then finds
-                # every finished sentence on disk and only redoes the one that
-                # was mid-flight when the job was killed.
+                # Flush after every completed sentence so the .tmp survives a
+                # SIGKILL with all regenerated work up to the mid-flight one.
                 f_out.flush()
                 f_r.flush()
+
+    # Walk finished every sentence: publish atomically over the old files.
+    os.replace(tmp_jsonl_path, out_jsonl_path)
+    os.replace(tmp_reasoning_jsonl_path, out_reasoning_jsonl_path)
 
 
 def stream_reasoning_and_content_for_messages(
@@ -586,6 +659,9 @@ def run_openai_for_direction_streaming(
              and their reasoning traces are always overwritten with the newly produced reasoning.
              When max_retries > 0, any attempt that produces an empty translation is retried up to
              max_retries additional times; the first non-empty result is kept immediately.
+             Outputs are rewritten via sibling .tmp files and published with an atomic os.replace
+             only after the full walk, so a mid-walk kill never loses previously banked sentences;
+             fully-complete directions are skipped without touching the published files.
     Inputs: OpenAI client, model id, data lists, indices, decoding params, output paths, prompt config,
             skip_existing_translations flag, max_retries count.
     Outputs: None.
@@ -596,8 +672,21 @@ def run_openai_for_direction_streaming(
     n_sentences = len(src_devtest)
 
     if skip_existing_translations:
-        existing_translations = _load_existing_jsonl_field(out_jsonl_path, "translation", n_sentences)
-        existing_reasoning = _load_existing_jsonl_field(out_reasoning_jsonl_path, "reasoning", n_sentences)
+        complete, existing_translations, existing_reasoning = _prepare_resume(
+            out_jsonl_path, out_reasoning_jsonl_path, n_sentences
+        )
+        if complete:
+            # Nothing to redo: leave the published files untouched (no
+            # truncate/rewrite window at all) and refresh their timestamps so
+            # scratch-purge age sweeps never see them as stale.
+            now = time.time()
+            for p in (out_jsonl_path, out_reasoning_jsonl_path):
+                try:
+                    os.utime(p, (now, now))
+                except OSError:
+                    pass
+            print(f"[skip-file] {out_jsonl_path} complete ({n_sentences}/{n_sentences}); left untouched.")
+            return
     else:
         existing_translations = [None] * n_sentences
         existing_reasoning = [None] * n_sentences
@@ -618,8 +707,15 @@ def run_openai_for_direction_streaming(
         prompts.append(prompt)
         templates_for_each.append(template)
 
-    with open(out_jsonl_path, "w", encoding="utf-8") as f_out, \
-         open(out_reasoning_jsonl_path, "w", encoding="utf-8") as f_r:
+    # All (re)writes go to sibling .tmp files; the previously published files
+    # stay intact on disk until every sentence is written, then an atomic
+    # os.replace publishes the new versions. A preemption/kill at any point
+    # therefore never loses banked sentences — at worst the in-flight one,
+    # and the partial .tmp is itself recovered by _prepare_resume next time.
+    tmp_jsonl_path = out_jsonl_path + ".tmp"
+    tmp_reasoning_jsonl_path = out_reasoning_jsonl_path + ".tmp"
+    with open(tmp_jsonl_path, "w", encoding="utf-8") as f_out, \
+         open(tmp_reasoning_jsonl_path, "w", encoding="utf-8") as f_r:
 
         for start in range(0, len(prompts), int(request_batch_size)):
             batch_prompts = prompts[start : start + int(request_batch_size)]
@@ -634,8 +730,8 @@ def run_openai_for_direction_streaming(
                         print(f"[skip] sentence {global_idx} already translated.")
                         f_out.write(json.dumps({"translation": stored}, ensure_ascii=False) + "\n")
                         f_r.write(json.dumps({"reasoning": existing_reasoning[global_idx]}, ensure_ascii=False) + "\n")
-                        # Flush per line so a SLURM preemption (SIGKILL) never
-                        # loses previously-completed sentences to OS buffering.
+                        # Flush per line so a killed attempt's .tmp always
+                        # carries everything walked so far.
                         f_out.flush()
                         f_r.flush()
                         continue
@@ -692,9 +788,11 @@ def run_openai_for_direction_streaming(
                 else:
                     f_r.write(json.dumps({"reasoning": None}, ensure_ascii=False) + "\n")
 
-                # Flush after every completed sentence: on scavenger preemption
-                # the resume pass (skip_existing_translations=True) then finds
-                # every finished sentence on disk and only redoes the one that
-                # was mid-flight when the job was killed.
+                # Flush after every completed sentence so the .tmp survives a
+                # SIGKILL with all regenerated work up to the mid-flight one.
                 f_out.flush()
                 f_r.flush()
+
+    # Walk finished every sentence: publish atomically over the old files.
+    os.replace(tmp_jsonl_path, out_jsonl_path)
+    os.replace(tmp_reasoning_jsonl_path, out_reasoning_jsonl_path)
