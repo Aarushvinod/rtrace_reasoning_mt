@@ -309,6 +309,77 @@ def load_system_prompt(repo_id: str, filename: str) -> dict[str, Any]:
     }
 
 
+_THINK_OPEN_MARKERS = ("<think>", "[THINK]")
+_THINK_CLOSE_MARKERS = ("</think>", "[/THINK]")
+
+
+def _split_think_block(text: str) -> Tuple[Optional[str], str]:
+    """
+    Purpose: Split raw model text that carries literal think markers into
+             (reasoning, answer) — the answer is everything after the LAST
+             close marker; the reasoning is everything before it with the
+             markers removed.
+    Inputs:  raw text.
+    Outputs: (reasoning, answer). reasoning is None when the text has no think
+             markers at all (the text is then entirely answer); with an open
+             marker but no close marker the whole text is unterminated
+             reasoning and the answer is "".
+    """
+    close_idx = -1
+    close_len = 0
+    for mk in _THINK_CLOSE_MARKERS:
+        i = text.rfind(mk)
+        if i > close_idx:
+            close_idx = i
+            close_len = len(mk)
+    if close_idx >= 0:
+        reasoning = text[:close_idx]
+        for mk in _THINK_OPEN_MARKERS + _THINK_CLOSE_MARKERS:
+            reasoning = reasoning.replace(mk, "")
+        return reasoning.strip(), text[close_idx + close_len:].strip()
+    if any(mk in text for mk in _THINK_OPEN_MARKERS):
+        cleaned = text
+        for mk in _THINK_OPEN_MARKERS:
+            cleaned = cleaned.replace(mk, "")
+        return cleaned.strip(), ""
+    return None, text
+
+
+def _extract_translation_and_reasoning(
+    content_val: str, reasoning_val: str, template
+) -> Tuple[str, str]:
+    """
+    Purpose: Turn one attempt's raw (content, reasoning) channel pair into a
+             (translation, reasoning) pair, robust to every observed routing of
+             think blocks: clean content (parser engaged), literal think
+             markers left in content (parser not engaged — split and translate
+             from the post-think answer instead of discarding the attempt),
+             and the whole output misrouted onto the reasoning channel
+             (recover the post-think answer from there). The think split runs
+             on RAW text, BEFORE postprocess_generation — postprocess cuts at
+             the first '###', which reasoning about ###-separated demos
+             routinely contains.
+    Inputs:  raw content channel text, raw reasoning channel text, template.
+    Outputs: (translation, reasoning) — translation is "" only when no usable
+             post-think answer exists anywhere (caller then retries).
+    """
+    raw = (content_val or "").strip()
+    reasoning_val = (reasoning_val or "").strip()
+    think_text, answer = _split_think_block(raw)
+    if think_text is not None:
+        reasoning_val = (reasoning_val + "\n" + think_text).strip() if reasoning_val else think_text
+        translation = postprocess_generation(answer, template) if answer else ""
+    else:
+        translation = postprocess_generation(raw, template)
+    if translation == "" and any(mk in reasoning_val for mk in _THINK_CLOSE_MARKERS):
+        r_think, r_answer = _split_think_block(reasoning_val)
+        if r_answer:
+            translation = postprocess_generation(r_answer, template)
+            if r_think is not None:
+                reasoning_val = r_think
+    return translation, reasoning_val
+
+
 def _attempt_translation(
     client,
     *,
@@ -323,9 +394,8 @@ def _attempt_translation(
 ) -> Tuple[str, str]:
     """
     Purpose: Make a single non-streaming translation attempt and return the
-             postprocessed translation together with its reasoning trace.
-             If the raw output contains think-block markers the translation is
-             treated as empty and the raw output is stored as the reasoning.
+             postprocessed translation together with its reasoning trace,
+             via _extract_translation_and_reasoning (think-marker robust).
     Inputs:  OpenAI client, served model id, fully-built messages list,
              postprocessing template, and decoding params.
     Outputs: tuple of (translation, reasoning_val) — both are strings,
@@ -343,15 +413,7 @@ def _attempt_translation(
     msg = resp.choices[0].message
     reasoning_val = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None) or ""
     content_val = getattr(msg, "content", None) or ""
-
-    translation = postprocess_generation(content_val.strip(), template)
-    if (
-        "<think>" in translation or "</think>" in translation
-        or "[THINK]" in translation or "[/THINK]" in translation
-    ):
-        reasoning_val = translation
-        translation = ""
-    return translation, reasoning_val
+    return _extract_translation_and_reasoning(content_val, reasoning_val, template)
 
 
 def _attempt_translation_streaming(
@@ -368,9 +430,8 @@ def _attempt_translation_streaming(
 ) -> Tuple[str, str]:
     """
     Purpose: Make a single streaming translation attempt and return the
-             postprocessed translation together with its reasoning trace.
-             If the raw output contains think-block markers the translation is
-             treated as empty and the raw output is stored as the reasoning.
+             postprocessed translation together with its reasoning trace,
+             via _extract_translation_and_reasoning (think-marker robust).
     Inputs:  OpenAI client, served model id, fully-built messages list,
              postprocessing template, and decoding params.
     Outputs: tuple of (translation, reasoning_val) — both are strings,
@@ -387,14 +448,7 @@ def _attempt_translation_streaming(
         extra_body=extra_body,
     )
 
-    translation = postprocess_generation((content_val or "").strip(), template)
-    if (
-        "<think>" in translation or "</think>" in translation
-        or "[THINK]" in translation or "[/THINK]" in translation
-    ):
-        reasoning_val = translation
-        translation = ""
-    return translation, reasoning_val
+    return _extract_translation_and_reasoning(content_val, reasoning_val, template)
 
 
 def run_openai_for_direction(
@@ -651,9 +705,13 @@ def run_openai_for_direction_streaming(
     system_prompt: Optional[Dict[str, Any]] = None,
     skip_existing_translations: bool = False,
     max_retries: int = 0,
+    use_streaming: bool = True,
 ) -> None:
     """
     Purpose: Generate translations with streaming and store reasoning/content separately.
+             use_streaming=False sends plain (non-streaming) requests instead — the Mistral
+             reasoning parser's streaming channel split is unreliable, so the Mistral family
+             runs non-streaming; the client needs a timeout sized for full-budget generations.
              When skip_existing_translations is True, sentences that already have a non-empty
              translation in out_jsonl_path are skipped; only empty/None entries are (re-)translated,
              and their reasoning traces are always overwritten with the newly produced reasoning.
@@ -748,7 +806,8 @@ def run_openai_for_direction_streaming(
 
                 # Initial attempt plus up to max_retries retries if the
                 # translation comes back empty.
-                translation, reasoning_val = _attempt_translation_streaming(
+                attempt_fn = _attempt_translation_streaming if use_streaming else _attempt_translation
+                translation, reasoning_val = attempt_fn(
                     client,
                     served_model_id=served_model_id,
                     messages=messages,
@@ -764,7 +823,7 @@ def run_openai_for_direction_streaming(
                     if translation != "":
                         break
                     print(f"[retry {retry_num}/{max_retries}] sentence {global_idx} returned empty translation, retrying...")
-                    translation, reasoning_val = _attempt_translation_streaming(
+                    translation, reasoning_val = attempt_fn(
                         client,
                         served_model_id=served_model_id,
                         messages=messages,

@@ -468,7 +468,9 @@ def main() -> None:
             poll_interval_s=VLLM_SERVER_POLL_INTERVAL_S,
             openai_api_key=OPENAI_API_KEY,
         ) as server:
-            client = OpenAI(api_key=OPENAI_API_KEY, base_url=server.base_url)
+            # timeout: non-streaming full-budget generations (Mistral, 28k new
+            # tokens) can far exceed the OpenAI client's 600s default.
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=server.base_url, timeout=3600.0)
             served_model_id = get_served_model_id(client)
 
             for job in jobs:
@@ -515,6 +517,10 @@ def main() -> None:
                         system_prompt=system_prompt,
                         skip_existing_translations=SKIP_EXISTING_TRANSLATIONS,
                         max_retries=MAX_TRANSLATION_RETRIES,
+                        # Mistral family: non-streaming requests — its
+                        # reasoning parser's streaming channel split is the
+                        # suspect path behind 100%-empty content.
+                        use_streaming=(family != "mistral"),
                     )
 
         if torch.cuda.is_available():
