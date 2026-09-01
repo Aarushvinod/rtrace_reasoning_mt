@@ -344,6 +344,11 @@ def _attempt_translation(
     reasoning_val = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None) or ""
     content_val = getattr(msg, "content", None) or ""
 
+    # RTRACE_DEBUG_RAW=1: show what the server actually put in each channel,
+    # BEFORE any guard/postprocess — the ground truth for parser diagnosis.
+    if os.environ.get("RTRACE_DEBUG_RAW") == "1":
+        print(f"[raw-channels] content[:150]={content_val[:150]!r} | reasoning[:150]={reasoning_val[:150]!r}")
+
     translation = postprocess_generation(content_val.strip(), template)
     if (
         "<think>" in translation or "</think>" in translation
@@ -386,6 +391,11 @@ def _attempt_translation_streaming(
         stop_sequences=stop_sequences,
         extra_body=extra_body,
     )
+
+    # RTRACE_DEBUG_RAW=1: show what the server actually put in each channel,
+    # BEFORE any guard/postprocess — the ground truth for parser diagnosis.
+    if os.environ.get("RTRACE_DEBUG_RAW") == "1":
+        print(f"[raw-channels] content[:150]={(content_val or '')[:150]!r} | reasoning[:150]={(reasoning_val or '')[:150]!r}")
 
     translation = postprocess_generation((content_val or "").strip(), template)
     if (
@@ -651,9 +661,14 @@ def run_openai_for_direction_streaming(
     system_prompt: Optional[Dict[str, Any]] = None,
     skip_existing_translations: bool = False,
     max_retries: int = 0,
+    use_streaming: bool = True,
 ) -> None:
     """
     Purpose: Generate translations with streaming and store reasoning/content separately.
+             use_streaming=False sends plain (non-streaming) requests instead: the server's
+             reasoning parser then splits reasoning/content via its batch extraction path —
+             the mistral parser does not split STREAMED responses (verified broken on vLLM
+             0.26.0 and 0.28.0), while non-streaming is the path the official recipes use.
              When skip_existing_translations is True, sentences that already have a non-empty
              translation in out_jsonl_path are skipped; only empty/None entries are (re-)translated,
              and their reasoning traces are always overwritten with the newly produced reasoning.
@@ -748,7 +763,8 @@ def run_openai_for_direction_streaming(
 
                 # Initial attempt plus up to max_retries retries if the
                 # translation comes back empty.
-                translation, reasoning_val = _attempt_translation_streaming(
+                attempt_fn = _attempt_translation_streaming if use_streaming else _attempt_translation
+                translation, reasoning_val = attempt_fn(
                     client,
                     served_model_id=served_model_id,
                     messages=messages,
@@ -764,7 +780,7 @@ def run_openai_for_direction_streaming(
                     if translation != "":
                         break
                     print(f"[retry {retry_num}/{max_retries}] sentence {global_idx} returned empty translation, retrying...")
-                    translation, reasoning_val = _attempt_translation_streaming(
+                    translation, reasoning_val = attempt_fn(
                         client,
                         served_model_id=served_model_id,
                         messages=messages,
