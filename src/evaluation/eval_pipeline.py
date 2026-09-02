@@ -618,9 +618,14 @@ def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
         leg_y0 = emp_y0 + pad_y
         leg_h = emp_h - 2 * pad_y
 
+        # The legend stays INSIDE the empty cell(s): a tall two-column box
+        # with compact spacing (plus the label-wrapping pass below) fits the
+        # gap, so it can never spill over neighbouring subplots. The old
+        # gap_width_scale widening is therefore capped to the empty region —
+        # callers still pass it, but it no longer grows past the gap.
         if gap_width_scale != 1.0:
-            new_leg_w = min(leg_w * gap_width_scale, 0.98)
-            leg_x0 = max(0.01, (emp_x0 + emp_x1 - new_leg_w) / 2.0)
+            new_leg_w = min(leg_w * gap_width_scale, emp_w - 2 * pad_x)
+            leg_x0 = max(emp_x0 + pad_x, (emp_x0 + emp_x1 - new_leg_w) / 2.0)
             leg_w = new_leg_w
 
         fig_w_in, fig_h_in = fig.get_size_inches()
@@ -628,15 +633,11 @@ def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
         leg_h_in = leg_h * fig_h_in
         aspect = leg_w_in / leg_h_in if leg_h_in > 0 else 1.0
         n_entries = len(legend_labels)
-        if aspect >= 4.0:
-            if n_entries >= 8:
-                ncol = min(4, max_ncol)
-            elif n_entries >= 6:
-                ncol = 3
-            else:
-                ncol = min(n_entries, max_ncol)
+        if n_entries >= 5:
+            # Many entries: tall-and-narrow beats wide — two columns.
+            ncol = 2 if aspect >= 0.8 else 1
         elif aspect >= 1.4:
-            ncol = min(n_entries, 2)
+            ncol = min(n_entries, max_ncol)
         else:
             ncol = 1
 
@@ -647,10 +648,10 @@ def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
             bbox_to_anchor=(leg_x0, leg_y0, leg_w, leg_h),
             bbox_transform=fig.transFigure,
             frameon=True, framealpha=0.97, edgecolor="#999999",
-            fontsize=22, title=title, title_fontsize=24,
-            borderpad=1.4, labelspacing=1.4,
-            handlelength=3.0, handleheight=1.9,
-            handletextpad=1.0, columnspacing=2.4,
+            fontsize=19, title=title, title_fontsize=21,
+            borderpad=1.0, labelspacing=1.05,
+            handlelength=2.2, handleheight=1.5,
+            handletextpad=0.8, columnspacing=1.5,
         )
         leg.get_title().set_fontweight("bold")
 
@@ -679,7 +680,9 @@ def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
         all_x1 = max(b.x1 for b in occ_bboxes)
         span_w = all_x1 - all_x0
         single_w = occ_bboxes[0].x1 - occ_bboxes[0].x0
-        leg_w = max(span_w * 0.5, single_w)
+        # Narrower anchor box; with mode="expand" removed below, the legend
+        # sizes itself to its content instead of stretching to fill this box.
+        leg_w = max(span_w * 0.34, single_w * 0.9)
         leg_cx = (all_x0 + all_x1) / 2.0
         leg_x0 = leg_cx - leg_w / 2.0
 
@@ -705,12 +708,11 @@ def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
             ncol=ncol,
             bbox_to_anchor=(leg_x0, leg_y, leg_w, leg_h),
             bbox_transform=fig.transFigure,
-            mode="expand",
             frameon=True, framealpha=0.97, edgecolor="#999999",
-            fontsize=23, title=title, title_fontsize=25,
-            borderpad=1.8, labelspacing=1.3,
-            handlelength=3.4, handleheight=2.0,
-            handletextpad=1.1, columnspacing=2.4,
+            fontsize=19, title=title, title_fontsize=21,
+            borderpad=1.1, labelspacing=1.0,
+            handlelength=2.4, handleheight=1.6,
+            handletextpad=0.85, columnspacing=1.6,
         )
         leg.get_title().set_fontweight("bold")
 
