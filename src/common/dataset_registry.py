@@ -58,6 +58,7 @@ class DatasetSpec:
     default_out_base: str = "runs"
     eval_plots_dirname: str = ""  # directory (under out_base) holding raw_scores_long.csv
     trace_layout: str = "family_method_state"  # or legacy "family_all_suffix"
+    emb_dirname: str = ""         # retrieval-embedding matrices directory (under out_base)
 
     def out_base(self) -> str:
         return os.environ.get("RTRACE_OUT_BASE", self.default_out_base)
@@ -94,6 +95,10 @@ class DatasetSpec:
         """eval_pipeline's raw_scores_long.csv for this arm."""
         return os.path.join(self.out_base(), self.eval_plots_dirname, "raw_scores_long.csv")
 
+    def emb_root(self) -> str:
+        """Retrieval-embedding matrices root (RTRACE_EMB_ROOT overrides)."""
+        return os.environ.get("RTRACE_EMB_ROOT", os.path.join(self.out_base(), self.emb_dirname))
+
 
 DATASETS: Dict[str, DatasetSpec] = {
     "flores": DatasetSpec(
@@ -113,6 +118,7 @@ DATASETS: Dict[str, DatasetSpec] = {
         default_out_base="drive/MyDrive",
         eval_plots_dirname="eval_plots_paper_initial",
         trace_layout="family_all_suffix",
+        emb_dirname="flores_embeddings",
     ),
     "wmt24pp": DatasetSpec(
         key="wmt24pp",
@@ -127,6 +133,7 @@ DATASETS: Dict[str, DatasetSpec] = {
         default_out_base="runs",
         eval_plots_dirname="WMT24PP_eval_plots",
         trace_layout="family_method_state",
+        emb_dirname="wmt24pp_embeddings",
     ),
 }
 
