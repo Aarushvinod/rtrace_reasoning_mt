@@ -39,13 +39,14 @@ sentence-level design matrix. From there:
     usage on, plus a single Spearman ρ across the 7 languages (the
     "do high-token languages benefit more from reasoning?" check).
 
-File layout (matches the rest of the pipeline):
-  • translations:   drive/MyDrive/{Mistral|Qwen}_All_Reasoning_{On|Off}{|_random|_sentinel|_edit_dist}/<model>/<dir>/k{K}_*.jsonl
-  • token counts:   drive/MyDrive/eval_token_counts/per_sentence_token_counts.csv
-  • trace recall:   drive/MyDrive/trace_example_recall/<method_key>/trace_recall_summary.csv  (also _all_methods)
-  • FLORES refs:    load_flores_sentences(tgt_lang)["devtest"]  (helper already in scope)
+File layout — dataset-agnostic via src/common/dataset_registry.py
+(RTRACE_DATASET selects the arm; paths below use its out_base + prefix):
+  • translations:   {out_base}/{prefix}{Mistral|Qwen}_All_Reasoning_{On|Off}{|_random|_sentinel|_edit_dist}/<model>/<dir>/k{K}_*.jsonl
+  • token counts:   {out_base}/{prefix}eval_token_counts/per_sentence_token_counts.csv
+  • trace recall:   {out_base}/{prefix}trace_example_recall/<method_key>/trace_recall_summary.csv  (also _all_methods)
+  • references:     DS.load_sentences(tgt_lang)["devtest"]  (standardized loader contract)
 
-Output: drive/MyDrive/chrfpp_per_sentence_analysis/*.csv
+Output: {out_base}/{prefix}chrfpp_per_sentence_analysis/*.csv
 
 Requirements:
   pip install sacrebleu pandas numpy scipy statsmodels
@@ -71,11 +72,18 @@ import statsmodels.formula.api as smf
 from statsmodels.stats.anova import anova_lm
 from statsmodels.tools.sm_exceptions import ConvergenceWarning
 from src.common.plots import _collect_legend
+from src.common.dataset_registry import get_dataset, filter_models
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration  (mirrors token_count_inference_budget.py / trace_example_recall.py)
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Dataset arm (RTRACE_DATASET: flores | wmt24pp). Every root, language list,
+# and k value below derives from the spec (src/common/dataset_registry.py),
+# so the script is dataset-agnostic given the {"dev","devtest"} loader contract.
+DS = get_dataset()
+OUT_BASE = DS.out_base()
 
 MODELS: Dict[str, str] = {
     "ministral_8b": "Ministral 8B",
@@ -85,6 +93,8 @@ MODELS: Dict[str, str] = {
     "qwen3_14b": "Qwen3 14B",
     "qwen3_32b": "Qwen3 32B",
 }
+# Optional csv filter (RTRACE_EVAL_MODELS), e.g. Qwen-only while Mistral runs.
+MODELS = filter_models(MODELS)
 
 MODEL_FAMILY_ROOT: Dict[str, str] = {
     "ministral_8b": "Mistral",
@@ -108,131 +118,44 @@ def _model_root_dir_map(mistral_root: str, qwen_root: str) -> Dict[str, str]:
     }
 
 
-GENERATION_RUNS_REASONING_ON: List[Dict[str, Any]] = [
-    {
-        "key": "reasoning_on",
-        "label": "RRF Reasoning On",
-        "method_key": "rrf",
-        "method_label": "RRF",
-        "reasoning_state": "On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On",
-            "drive/MyDrive/Qwen_All_Reasoning_On",
-        ),
-        "filename_pattern": "k{K}_rrf_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_random",
-        "label": "Random Reasoning On",
-        "method_key": "random",
-        "method_label": "Random",
-        "reasoning_state": "On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_random",
-            "drive/MyDrive/Qwen_All_Reasoning_On_random",
-        ),
-        "filename_pattern": "k{K}_random_pool_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_sentinel",
-        "label": "Sentinel Reasoning On",
-        "method_key": "sentinel",
-        "method_label": "Sentinel",
-        "reasoning_state": "On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_On_sentinel",
-        ),
-        "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_edit_dist",
-        "label": "Edit Distance Reasoning On",
-        "method_key": "edit_dist",
-        "method_label": "Edit Distance",
-        "reasoning_state": "On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_On_edit_dist",
-        ),
-        "filename_pattern": "k{K}_edit_dist_template11.jsonl",
-    },
+# (root-suffix, method_key, method label, filename pattern) per selection
+# method — run keys/labels are built from these EXACTLY as the legacy literal
+# lists did, so cached CSVs keyed on run_key/method_label stay valid.
+_METHODS: List[Tuple[str, str, str, str]] = [
+    ("",           "rrf",       "RRF",           "k{K}_rrf_template11.jsonl"),
+    ("_random",    "random",    "Random",        "k{K}_random_pool_template11.jsonl"),
+    ("_sentinel",  "sentinel",  "Sentinel",      "k{K}_pool_sentinel_src_rerank_template11.jsonl"),
+    ("_edit_dist", "edit_dist", "Edit Distance", "k{K}_edit_dist_template11.jsonl"),
 ]
 
-GENERATION_RUNS_REASONING_OFF: List[Dict[str, Any]] = [
-    {
-        "key": "reasoning_off",
-        "label": "RRF Reasoning Off",
-        "method_key": "rrf",
-        "method_label": "RRF",
-        "reasoning_state": "Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off",
-            "drive/MyDrive/Qwen_All_Reasoning_Off",
-        ),
-        "filename_pattern": "k{K}_rrf_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_random",
-        "label": "Random Reasoning Off",
-        "method_key": "random",
-        "method_label": "Random",
-        "reasoning_state": "Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_random",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_random",
-        ),
-        "filename_pattern": "k{K}_random_pool_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_sentinel",
-        "label": "Sentinel Reasoning Off",
-        "method_key": "sentinel",
-        "method_label": "Sentinel",
-        "reasoning_state": "Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_sentinel",
-        ),
-        "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_edit_dist",
-        "label": "Edit Distance Reasoning Off",
-        "method_key": "edit_dist",
-        "method_label": "Edit Distance",
-        "reasoning_state": "Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_edit_dist",
-        ),
-        "filename_pattern": "k{K}_edit_dist_template11.jsonl",
-    },
-]
 
-SRC_LANGS: List[str] = ["eng_Latn"]
-TGT_LANGS: List[str] = [
-    "wol_Latn",
-    "swh_Latn",
-    "lus_Latn",
-    "mni_Beng",
-    "tel_Telu",
-    "tam_Taml",
-    "uzn_Latn",
-]
+def _runs_for_state(state_title: str) -> List[Dict[str, Any]]:
+    runs: List[Dict[str, Any]] = []
+    for suffix, method_key, method_label, filename_pattern in _METHODS:
+        runs.append({
+            "key": f"reasoning_{state_title.lower()}{suffix}",
+            "label": f"{method_label} Reasoning {state_title}",
+            "method_key": method_key,
+            "method_label": method_label,
+            "reasoning_state": state_title,
+            "root_dir": _model_root_dir_map(
+                DS.generation_root("Mistral", state_title, suffix),
+                DS.generation_root("Qwen", state_title, suffix),
+            ),
+            "filename_pattern": filename_pattern,
+        })
+    return runs
 
-LANG_DISPLAY: Dict[str, str] = {
-    "eng_Latn": "English",
-    "wol_Latn": "Wolof",
-    "swh_Latn": "Swahili",
-    "lus_Latn": "Mizo",
-    "mni_Beng": "Meitei",
-    "tel_Telu": "Telugu",
-    "tam_Taml": "Tamil",
-    "uzn_Latn": "Uzbek",
-}
 
-K_LIST: List[int] = [0, 1, 3, 5, 7, 10]
+GENERATION_RUNS_REASONING_ON: List[Dict[str, Any]] = _runs_for_state("On")
+GENERATION_RUNS_REASONING_OFF: List[Dict[str, Any]] = _runs_for_state("Off")
+
+SRC_LANGS: List[str] = list(DS.src_langs)
+TGT_LANGS: List[str] = list(DS.tgt_langs)
+
+LANG_DISPLAY: Dict[str, str] = dict(DS.lang_display)
+
+K_LIST: List[int] = list(DS.k_list)
 EVAL_FIRST_M: Optional[int] = 100
 
 # Map our method_key → the reasoning-ON run_key (used to join trace_recall
@@ -245,15 +168,17 @@ METHOD_KEY_TO_REASONING_ON_RUN_KEY: Dict[str, str] = {
 }
 
 # Output root for this script.
-OUTPUT_ROOT = "drive/MyDrive/chrfpp_per_sentence_analysis"
+OUTPUT_ROOT = os.environ.get("RTRACE_CHRFPP_DIR", DS.analysis_dir("chrfpp_per_sentence_analysis"))
 
 # Existing CSVs we read but never rewrite.
-TOKEN_COUNTS_CSV = "drive/MyDrive/eval_token_counts/per_sentence_token_counts.csv"
-TRACE_RECALL_SUMMARY_GLOBAL_CSV = (
-    "drive/MyDrive/trace_example_recall/trace_recall_summary_all_methods.csv"
+TOKEN_COUNTS_CSV = os.environ.get(
+    "RTRACE_TOKENS_CSV",
+    os.path.join(DS.analysis_dir("eval_token_counts"), "per_sentence_token_counts.csv"),
 )
-# Fallback: per-method copies (in case the global aggregate isn't on disk).
-TRACE_RECALL_SUMMARY_PER_METHOD_DIR = "drive/MyDrive/trace_example_recall"
+TRACE_RECALL_SUMMARY_PER_METHOD_DIR = DS.analysis_dir("trace_example_recall")
+TRACE_RECALL_SUMMARY_GLOBAL_CSV = os.path.join(
+    TRACE_RECALL_SUMMARY_PER_METHOD_DIR, "trace_recall_summary_all_methods.csv"
+)
 TRACE_RECALL_METHOD_KEYS: List[str] = ["rrf", "random", "sentinel", "edit_dist"]
 
 # When True, skip Stage 1 / Stage 2 etc. if their CSV is already on disk.
@@ -516,22 +441,22 @@ def _coerce_numeric_inplace(df: pd.DataFrame, columns: Sequence[str]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FLORES reference cache
+# Reference cache
 # ─────────────────────────────────────────────────────────────────────────────
 
-# `load_flores_sentences` is provided by the surrounding Colab notebook / cell 1
-# (same as trace_example_recall.py expects). We cache its result per language
-# so the per-sentence loop doesn't re-load the references for every file.
-_FLORES_REF_CACHE: Dict[str, List[str]] = {}
+# References come from the dataset registry's standardized loader
+# (load_sentences(lang) -> {"dev", "devtest"}); cached per language so the
+# per-sentence loop doesn't re-load them for every file.
+_REF_CACHE: Dict[str, List[str]] = {}
 
 
 def get_flores_devtest_refs(tgt_lang: str) -> List[str]:
-    """Cached wrapper around the existing `load_flores_sentences` helper."""
-    if tgt_lang in _FLORES_REF_CACHE:
-        return _FLORES_REF_CACHE[tgt_lang]
-    data = load_flores_sentences(tgt_lang)  # noqa: F821 — provided at runtime
-    refs = list(data["devtest"])
-    _FLORES_REF_CACHE[tgt_lang] = refs
+    """Cached devtest references for tgt_lang (name kept for call-site
+    stability; dataset-agnostic via the registry loader)."""
+    if tgt_lang in _REF_CACHE:
+        return _REF_CACHE[tgt_lang]
+    refs = list(DS.load_sentences(tgt_lang)["devtest"])
+    _REF_CACHE[tgt_lang] = refs
     return refs
 
 

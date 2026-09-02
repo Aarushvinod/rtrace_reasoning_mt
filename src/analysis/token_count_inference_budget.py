@@ -54,12 +54,21 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from src.common.dataset_registry import get_dataset, filter_models
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration (mirrors prior scripts)
 # ─────────────────────────────────────────────────────────────────────────────
 
 LOAD_FROM_CSV: bool = True
+
+# Dataset arm (RTRACE_DATASET: flores | wmt24pp). Every root, language list,
+# and k value below derives from the spec, so this script is dataset-agnostic:
+# any dataset whose loader speaks the {"dev","devtest"} contract plugs in via
+# src/common/dataset_registry.py.
+DS = get_dataset()
+OUT_BASE = DS.out_base()
 
 MODELS: Dict[str, str] = {
     "ministral_8b": "Ministral 8B",
@@ -69,6 +78,8 @@ MODELS: Dict[str, str] = {
     "qwen3_14b": "Qwen3 14B",
     "qwen3_32b": "Qwen3 32B",
 }
+# Optional csv filter (RTRACE_EVAL_MODELS), e.g. Qwen-only while Mistral runs.
+MODELS = filter_models(MODELS)
 
 MODEL_TOKENIZER_ID: Dict[str, str] = {
     "ministral_8b":    "mistralai/Ministral-3-8B-Reasoning-2512",
@@ -109,141 +120,53 @@ def _model_root_dir_map(mistral_root: str, qwen_root: str) -> Dict[str, str]:
     }
 
 
-GENERATION_RUNS_REASONING_ON: List[Dict[str, Any]] = [
-    {
-        "key": "reasoning_on",
-        "label": "RRF Reasoning On",
-        "method_label": "RRF",
-        "reasoning_state": "On",
-        "suffix": "",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On",
-            "drive/MyDrive/Qwen_All_Reasoning_On",
-        ),
-        "filename_pattern": "k{K}_rrf_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_random",
-        "label": "Random Reasoning On",
-        "method_label": "Random",
-        "reasoning_state": "On",
-        "suffix": "_random",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_random",
-            "drive/MyDrive/Qwen_All_Reasoning_On_random",
-        ),
-        "filename_pattern": "k{K}_random_pool_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_sentinel",
-        "label": "Sentinel Reasoning On",
-        "method_label": "Sentinel",
-        "reasoning_state": "On",
-        "suffix": "_sentinel",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_On_sentinel",
-        ),
-        "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_edit_dist",
-        "label": "Edit Distance Reasoning On",
-        "method_label": "Edit Distance",
-        "reasoning_state": "On",
-        "suffix": "_edit_dist",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_On_edit_dist",
-        ),
-        "filename_pattern": "k{K}_edit_dist_template11.jsonl",
-    },
+# (root-suffix, method label, filename pattern) per selection method — run
+# keys/labels are built from these EXACTLY as the legacy literal lists did,
+# so every cached CSV keyed on run_key/method_label stays valid.
+_METHODS: List[Tuple[str, str, str]] = [
+    ("",           "RRF",           "k{K}_rrf_template11.jsonl"),
+    ("_random",    "Random",        "k{K}_random_pool_template11.jsonl"),
+    ("_sentinel",  "Sentinel",      "k{K}_pool_sentinel_src_rerank_template11.jsonl"),
+    ("_edit_dist", "Edit Distance", "k{K}_edit_dist_template11.jsonl"),
 ]
 
-GENERATION_RUNS_REASONING_OFF: List[Dict[str, Any]] = [
-    {
-        "key": "reasoning_off",
-        "label": "RRF Reasoning Off",
-        "method_label": "RRF",
-        "reasoning_state": "Off",
-        "suffix": "",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off",
-            "drive/MyDrive/Qwen_All_Reasoning_Off",
-        ),
-        "filename_pattern": "k{K}_rrf_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_random",
-        "label": "Random Reasoning Off",
-        "method_label": "Random",
-        "reasoning_state": "Off",
-        "suffix": "_random",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_random",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_random",
-        ),
-        "filename_pattern": "k{K}_random_pool_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_sentinel",
-        "label": "Sentinel Reasoning Off",
-        "method_label": "Sentinel",
-        "reasoning_state": "Off",
-        "suffix": "_sentinel",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_sentinel",
-        ),
-        "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_edit_dist",
-        "label": "Edit Distance Reasoning Off",
-        "method_label": "Edit Distance",
-        "reasoning_state": "Off",
-        "suffix": "_edit_dist",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_edit_dist",
-        ),
-        "filename_pattern": "k{K}_edit_dist_template11.jsonl",
-    },
-]
 
-SRC_LANGS: List[str] = ["eng_Latn"]
-TGT_LANGS: List[str] = [
-    "wol_Latn",
-    "swh_Latn",
-    "lus_Latn",
-    "mni_Beng",
-    "tel_Telu",
-    "tam_Taml",
-    "uzn_Latn",
-]
-K_LIST: List[int] = [0, 1, 3, 5, 7, 10]
+def _runs_for_state(state_title: str) -> List[Dict[str, Any]]:
+    runs: List[Dict[str, Any]] = []
+    for suffix, method_label, filename_pattern in _METHODS:
+        runs.append({
+            "key": f"reasoning_{state_title.lower()}{suffix}",
+            "label": f"{method_label} Reasoning {state_title}",
+            "method_label": method_label,
+            "reasoning_state": state_title,
+            "suffix": suffix,
+            "root_dir": _model_root_dir_map(
+                DS.generation_root("Mistral", state_title, suffix),
+                DS.generation_root("Qwen", state_title, suffix),
+            ),
+            "filename_pattern": filename_pattern,
+        })
+    return runs
+
+
+GENERATION_RUNS_REASONING_ON: List[Dict[str, Any]] = _runs_for_state("On")
+GENERATION_RUNS_REASONING_OFF: List[Dict[str, Any]] = _runs_for_state("Off")
+
+SRC_LANGS: List[str] = list(DS.src_langs)
+TGT_LANGS: List[str] = list(DS.tgt_langs)
+K_LIST: List[int] = list(DS.k_list)
 EVAL_FIRST_M: Optional[int] = 100
 
-INCLUDE_K0: bool = False
+INCLUDE_K0: bool = os.environ.get("RTRACE_INCLUDE_K0", "0") == "1"
 K_LIST_EFFECTIVE: List[int] = K_LIST if INCLUDE_K0 else [k for k in K_LIST if k > 0]
 
-LANG_DISPLAY: Dict[str, str] = {
-    "eng_Latn": "English",
-    "wol_Latn": "Wolof",
-    "swh_Latn": "Swahili",
-    "lus_Latn": "Mizo",
-    "mni_Beng": "Meitei",
-    "tel_Telu": "Telugu",
-    "tam_Taml": "Tamil",
-    "uzn_Latn": "Uzbek",
-}
+LANG_DISPLAY: Dict[str, str] = dict(DS.lang_display)
 
-REASONING_ROOT_PARENT = "drive/MyDrive"
-OUTPUT_DIR = "drive/MyDrive/eval_token_counts"
+OUTPUT_DIR = os.environ.get("RTRACE_TOKENS_DIR", DS.analysis_dir("eval_token_counts"))
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, "per_sentence_token_counts.csv")
 
 # ── Correlation analysis configuration ────────────────────────────────────────
-CORRELATION_EVAL_CSV: str = "drive/MyDrive/eval_plots_paper_initial/raw_scores_long.csv"
+CORRELATION_EVAL_CSV: str = os.environ.get("RTRACE_EVAL_CSV", DS.eval_scores_csv())
 CORRELATION_METRIC: str = "chrF++"
 CORRELATION_OUTPUT_CSV: str = os.path.join(OUTPUT_DIR, "token_quality_correlations.csv")
 
@@ -348,11 +271,11 @@ def build_translation_path(
 
 
 def build_reasoning_root(model_key: str, suffix: str) -> str:
+    # Layout is dataset-dependent (legacy flores: one "all" root per method;
+    # wmt24pp: per-method per-state roots) — the registry resolves it. Traces
+    # exist for reasoning-ON only, which is the registry's default state.
     family = MODEL_FAMILY_ROOT[model_key]
-    return os.path.join(
-        REASONING_ROOT_PARENT,
-        f"reasoning_traces_{family}_all{suffix}",
-    )
+    return DS.reasoning_trace_root(family, suffix)
 
 
 def build_reasoning_path(
