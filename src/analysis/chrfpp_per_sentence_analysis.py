@@ -298,6 +298,11 @@ MODEL_FAMILIES: Dict[str, List[str]] = {
     "Mistral": ["ministral_8b", "ministral_14b", "magistral_small"],
     "Qwen":    ["qwen3_8b",     "qwen3_14b",     "qwen3_32b"],
 }
+# Respect the RTRACE_EVAL_MODELS filter everywhere family lists are used
+# (per-family ANOVA/LMM loops, cross-model plots): keep every family key so
+# output-path dicts stay stable, but drop filtered-out models — an empty
+# family then contributes zero rows / gets skipped instead of KeyError-ing.
+MODEL_FAMILIES = {fam: [m for m in ms if m in MODELS] for fam, ms in MODEL_FAMILIES.items()}
 MODEL_SIZE_THRESHOLD: float = 14.0
 METRIC_NAME_FOR_PLOTS: str = "chrF++"  # the metric label printed on plots & tables
 
@@ -2682,6 +2687,9 @@ def save_cross_model_comparison_superplot(
 ) -> None:
     ensure_dir(os.path.dirname(op))
     sk, lk = _small_and_large_model_keys(st, restrict_to)
+    # Defensive: never index MODELS with a filtered-out key.
+    sk = [mk for mk in sk if mk in MODELS]
+    lk = [mk for mk in lk if mk in MODELS]
     parts: List[pd.DataFrame] = []
     for mk in sk:
         s = df[(df["model_key"] == mk) & (df["run_key"] == on_run_key)
@@ -2821,6 +2829,8 @@ def generate_plot_suite(df_master: pd.DataFrame) -> None:
             MODEL_SIZE_THRESHOLD,
         )
         for fn, fk in MODEL_FAMILIES.items():
+            if not fk:  # family fully filtered out (RTRACE_EVAL_MODELS)
+                continue
             fd = os.path.join(md2, slugify(fn))
             ensure_dir(fd)
             save_cross_model_comparison_superplot(
