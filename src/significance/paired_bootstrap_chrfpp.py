@@ -60,6 +60,14 @@ except Exception as exc:  # pragma: no cover
 # Configuration copied / adapted from eval_pipeline.py
 # ─────────────────────────────────────────────────────────────────────────────
 
+from src.common.dataset_registry import get_dataset, filter_models
+
+# Dataset arm (RTRACE_DATASET: flores | wmt24pp) — every root, language list,
+# and k value below derives from the registry spec (standardized
+# {"dev","devtest"} loader contract), so the script is dataset-agnostic.
+DS = get_dataset()
+OUT_BASE = DS.out_base()
+
 LOAD_FROM_CSV: bool = True
 
 MODELS: Dict[str, str] = {
@@ -70,6 +78,8 @@ MODELS: Dict[str, str] = {
     "qwen3_14b": "Qwen3 14B",
     "qwen3_32b": "Qwen3 32B",
 }
+# Optional csv filter (RTRACE_EVAL_MODELS), e.g. Qwen-only while Mistral runs.
+MODELS = filter_models(MODELS)
 
 
 def _model_root_dir_map(mistral_root: str, qwen_root: str) -> Dict[str, str]:
@@ -84,95 +94,38 @@ def _model_root_dir_map(mistral_root: str, qwen_root: str) -> Dict[str, str]:
     }
 
 
-GENERATION_RUNS_REASONING_ON: List[Dict[str, Any]] = [
-    {
-        "key": "reasoning_on",
-        "label": "RRF Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On",
-            "drive/MyDrive/Qwen_All_Reasoning_On",
-        ),
-        "filename_pattern": "k{K}_rrf_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_random",
-        "label": "Random Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_random",
-            "drive/MyDrive/Qwen_All_Reasoning_On_random",
-        ),
-        "filename_pattern": "k{K}_random_pool_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_sentinel",
-        "label": "Sentinel Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_On_sentinel",
-        ),
-        "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
-    },
-    {
-        "key": "reasoning_on_edit_dist",
-        "label": "Edit Distance Reasoning On",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_On_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_On_edit_dist",
-        ),
-        "filename_pattern": "k{K}_edit_dist_template11.jsonl",
-    },
+# (root-suffix, method label, filename pattern) per selection method — run
+# keys/labels are built from these EXACTLY as the legacy literal lists did,
+# so cached CSVs keyed on run_key stay valid.
+_METHODS = [
+    ("",           "RRF",           "k{K}_rrf_template11.jsonl"),
+    ("_random",    "Random",        "k{K}_random_pool_template11.jsonl"),
+    ("_sentinel",  "Sentinel",      "k{K}_pool_sentinel_src_rerank_template11.jsonl"),
+    ("_edit_dist", "Edit Distance", "k{K}_edit_dist_template11.jsonl"),
 ]
 
-GENERATION_RUNS_REASONING_OFF: List[Dict[str, Any]] = [
-    {
-        "key": "reasoning_off",
-        "label": "RRF Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off",
-            "drive/MyDrive/Qwen_All_Reasoning_Off",
-        ),
-        "filename_pattern": "k{K}_rrf_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_random",
-        "label": "Random Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_random",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_random",
-        ),
-        "filename_pattern": "k{K}_random_pool_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_sentinel",
-        "label": "Sentinel Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_sentinel",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_sentinel",
-        ),
-        "filename_pattern": "k{K}_pool_sentinel_src_rerank_template11.jsonl",
-    },
-    {
-        "key": "reasoning_off_edit_dist",
-        "label": "Edit Distance Reasoning Off",
-        "root_dir": _model_root_dir_map(
-            "drive/MyDrive/Mistral_All_Reasoning_Off_edit_dist",
-            "drive/MyDrive/Qwen_All_Reasoning_Off_edit_dist",
-        ),
-        "filename_pattern": "k{K}_edit_dist_template11.jsonl",
-    },
-]
 
-SRC_LANGS: List[str] = ["eng_Latn"]
-TGT_LANGS: List[str] = [
-    "wol_Latn",
-    "swh_Latn",
-    "lus_Latn",
-    "mni_Beng",
-    "tel_Telu",
-    "tam_Taml",
-    "uzn_Latn",
-]
-K_LIST: List[int] = [0, 1, 3, 5, 7, 10]
+def _runs_for_state(state_title: str) -> List[Dict[str, Any]]:
+    runs: List[Dict[str, Any]] = []
+    for suffix, method_label, filename_pattern in _METHODS:
+        runs.append({
+            "key": f"reasoning_{state_title.lower()}{suffix}",
+            "label": f"{method_label} Reasoning {state_title}",
+            "root_dir": _model_root_dir_map(
+                DS.generation_root("Mistral", state_title, suffix),
+                DS.generation_root("Qwen", state_title, suffix),
+            ),
+            "filename_pattern": filename_pattern,
+        })
+    return runs
+
+
+GENERATION_RUNS_REASONING_ON: List[Dict[str, Any]] = _runs_for_state("On")
+GENERATION_RUNS_REASONING_OFF: List[Dict[str, Any]] = _runs_for_state("Off")
+
+SRC_LANGS: List[str] = list(DS.src_langs)
+TGT_LANGS: List[str] = list(DS.tgt_langs)
+K_LIST: List[int] = list(DS.k_list)
 EVAL_FIRST_M: Optional[int] = 100
 
 # Toggle whether the k=0 baseline is included in the bootstrap pipeline.
@@ -184,7 +137,7 @@ EVAL_FIRST_M: Optional[int] = 100
 # cached CSV to force a full recompute, or rely on the K_LIST_EFFECTIVE
 # filter applied at the very end (which drops k=0 from the final outputs
 # whenever the toggle is False, regardless of what the cache contains).
-INCLUDE_K0: bool = True
+INCLUDE_K0: bool = os.environ.get("RTRACE_INCLUDE_K0", "1") == "1"
 K_LIST_EFFECTIVE: List[int] = K_LIST if INCLUDE_K0 else [k for k in K_LIST if k > 0]
 
 # Match the original evaluation behavior by default: for a fixed k, only keep
@@ -197,18 +150,11 @@ PAIRED_JOBS = 1
 SACREBLEU_SEED = "12345"
 
 # Output root for this script.
-SIGNIFICANCE_DIR = "drive/MyDrive/eval_plots_paper_final_paired_bs_chrfpp"
+SIGNIFICANCE_DIR = os.environ.get(
+    "RTRACE_CHRFPP_SIG_DIR", DS.analysis_dir("eval_plots_paper_final_paired_bs_chrfpp")
+)
 
-LANG_DISPLAY: Dict[str, str] = {
-    "eng_Latn": "English",
-    "wol_Latn": "Wolof",
-    "swh_Latn": "Swahili",
-    "lus_Latn": "Mizo",
-    "mni_Beng": "Meitei",
-    "tel_Telu": "Telugu",
-    "tam_Taml": "Tamil",
-    "uzn_Latn": "Uzbek",
-}
+LANG_DISPLAY: Dict[str, str] = dict(DS.lang_display)
 
 DF_LONG_COLUMNS = [
     "model_key",
@@ -457,16 +403,13 @@ def read_jsonl_translations(path: str) -> List[str]:
 
 
 def load_flores_devtest(src_lang: str, tgt_lang: str) -> Tuple[List[str], List[str]]:
-    """Load aligned FLORES devtest sources and references for one direction.
+    """Load aligned devtest sources and references for one direction.
 
-    Uses the Muennighoff/flores200 mirror (same schema as facebook/flores —
-    `sentence` field, `devtest` split — but actively maintained on HF Hub and
-    free of the cp1252/extract-archive issues the legacy loader hits on Colab
-    + datasets>=3.0)."""
-    ds_src = load_dataset("Muennighoff/flores200", src_lang, trust_remote_code=True)
-    ds_tgt = load_dataset("Muennighoff/flores200", tgt_lang, trust_remote_code=True)
-    sources = [ex["sentence"] for ex in ds_src["devtest"]]
-    targets = [ex["sentence"] for ex in ds_tgt["devtest"]]
+    Dataset-agnostic via the registry's standardized loader (name kept for
+    call-site stability). The registry's flores loader supersedes the direct
+    Muennighoff/flores200 fetch this function previously used."""
+    sources = list(DS.load_sentences(src_lang)["devtest"])
+    targets = list(DS.load_sentences(tgt_lang)["devtest"])
     return sources, targets
 
 
