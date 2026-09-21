@@ -284,6 +284,9 @@ PAIRED_BS_LONG_COLUMNS: List[str] = [
 # Stage 7 — eval_pipeline-style plotting. k=0 fixed out of plots
 # (eval_pipeline.py's default; the user explicitly asked we "make that fixed").
 GENERATE_PLOTS: bool = True
+# RTRACE_PLOTS_ONLY=1: load the Stage-1/2 caches and re-render the Stage-7
+# plot suite only (skips the sanity check and Stages 3-6b).
+PLOTS_ONLY: bool = os.environ.get("RTRACE_PLOTS_ONLY", "0") == "1"
 # k=0 (zero-shot) included by default. For edit_dist / sentinel / rrf the k=0
 # chrF++ comes from the random run's k=0 file via the fallback wired in
 # `_build_k0_fallback_map` — so all four method lines converge at k=0 (the
@@ -2095,13 +2098,11 @@ def _polish_axes(ax, axhline_zero: bool = False) -> None:
 
 
 def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
-                          title="Method", max_ncol=4, gap_width_scale=1.0,
-                          bottom_legend_w=0.36):
-    """Lifted verbatim from eval_pipeline.py — places a shared legend either
-    into an empty subplot slot or below the figure, picking ncol from the
-    available aspect ratio. `bottom_legend_w` controls the bottom-right
-    legend width (as a fraction of figure width) when the grid has no empty
-    cells; right edge is anchored at x=0.98 regardless."""
+                          title="Method", max_ncol=4, gap_width_scale=1.0):
+    """Lifted from eval_pipeline.py — places a shared legend either into an
+    empty subplot slot or, when the grid has no empty cells, in the bottom
+    margin below the shared x-label, right-aligned to the panel grid and
+    sized to its content."""
     if not legend_handles or not legend_labels:
         return
 
@@ -2169,34 +2170,16 @@ def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
                 if best != -1:
                     txt.set_text(label[:best] + "\n" + label[best + 1:])
     else:
-        # No empty cells in the grid — place the legend INSIDE the bottom
-        # margin of the figure, *below* the supxlabel, in the bottom-RIGHT
-        # corner. Stack top-to-bottom is:
-        #   panels (y ≥ 0.225) → supxlabel (centered at x=0.5, y≈0.190)
-        #   → legend (lower-right anchor at (0.98, 0.030), so the legend's
-        #     right edge sits at x=0.98 — hard against the figure right
-        #     edge — and it extends leftward to ~x=0.68).
-        # The centered supxlabel at x≈0.5 has the entire left half of the
-        # bottom band to itself.
-        # Bottom-right placement with a hard dark border and explicit
-        # horizontal extent. 4-tuple `bbox_to_anchor=(x, y, w, h)` defines
-        # an anchor rectangle whose right edge is pinned at x=0.98 and
-        # whose width is `bottom_legend_w` (caller-controlled, default
-        # 0.36); `mode="expand"` forces the legend to expand horizontally
-        # to fill that block, which gives the legend a substantial
-        # bottom-right region without ever crossing the centered supxlabel
-        # (~x ∈ [0.42, 0.58]) so long as bottom_legend_w stays under ~0.40
-        # — the supxlabel sits at y=0.190, the legend extends up only to
-        # ~y=0.10 from its y=0.030 bottom, so they don't visually collide
-        # vertically either. Caller picks `max_ncol` to lay out entries.
+        # Content-sized (no mode="expand") and anchored at the grid's right
+        # edge, so the legend can't overhang the panels; y=0.030 keeps it
+        # below the shared x-label the callers draw at y=0.190.
         ncol = min(len(legend_labels), max_ncol)
-        bottom_legend_x = 0.98 - bottom_legend_w
+        grid_x1 = max(b.x1 for b in occ_bboxes)
         leg = fig.legend(
             legend_handles, legend_labels,
             loc="lower right",
-            bbox_to_anchor=(bottom_legend_x, 0.030, bottom_legend_w, 0.18),
+            bbox_to_anchor=(grid_x1, 0.030),
             bbox_transform=fig.transFigure,
-            mode="expand",
             ncol=ncol,
             frameon=True, framealpha=1.0, edgecolor="#1a1a1a",
             fontsize=_LEGEND_FONTSIZE,
@@ -2207,10 +2190,8 @@ def _place_figure_legend(fig, axes_flat, n_used, legend_handles, legend_labels,
             handletextpad=0.8, columnspacing=2.4,
         )
         leg.get_title().set_fontweight("bold")
-        # Hard border — thick black-ish frame line.
         leg.get_frame().set_linewidth(2.5)
         leg.get_frame().set_edgecolor("#1a1a1a")
-
 
 def _attach_outside_legend(fig, hax, labels=None, ncol=4, title=None):
     if isinstance(hax, plt.Axes):
@@ -2666,9 +2647,7 @@ def save_aggregated_scores_superplot(da: pd.DataFrame, met: str,
              ha="center", va="center", rotation="vertical",
              fontsize=_SUPAXIS_FONTSIZE, fontweight="bold")
     fig.tight_layout(rect=[0.030, 0.225, 1, 0.950])
-    # 6 entries (4 methods + 2 reasoning states) → 3 cols × 2 rows so the
-    # legend matches the height (and now the width) of the aggregated-
-    # deltas legend above — both default to bottom_legend_w=0.36.
+    # 6 entries (4 methods + 2 reasoning states) → 3 cols × 2 rows.
     _place_figure_legend(fig, af, n, lh, ll, title="Method – Reasoning State", max_ncol=3)
     fig.savefig(op, dpi=250, bbox_inches="tight"); plt.close(fig)
 
@@ -3182,9 +3161,14 @@ def main() -> None:
         row = counts.loc[rk]
         print(f"  {rk:<32s}" + " ".join(f"{int(row[k]):>6d}" for k in sorted(set(K_LIST))))
 
-    sanity_check_stage1_vs_corpus(df_chrfpp, n_files=5)
+    if not PLOTS_ONLY:
+        sanity_check_stage1_vs_corpus(df_chrfpp, n_files=5)
 
     df_master = load_or_build_master(df_chrfpp)
+    if PLOTS_ONLY:
+        generate_plot_suite(df_master)
+        print(f"[RTRACE_PLOTS_ONLY] plot suite re-rendered under {PLOTS_ROOT}/")
+        return
     df_corr = load_or_compute_correlations(df_master)
     df_anova_by_family = load_or_fit_anova(df_master)
     df_lmm_by_family, df_lmm_joint_by_family = load_or_fit_lmm(df_master)
